@@ -8,7 +8,7 @@
   import { handleError } from '$lib/utils/handle-error';
   import { AssetMediaSize, getPerson, mergePeople, updatePerson, type PersonResponseDto } from '@immich/sdk';
   import { Button, Checkbox, IconButton, LoadingSpinner, Switch, Text, modalManager, toastManager } from '@immich/ui';
-  import { mdiClose } from '@mdi/js';
+  import { mdiClose, mdiRefresh } from '@mdi/js';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { SvelteMap } from 'svelte/reactivity';
@@ -36,7 +36,8 @@
   let suggestions: Suggestion[] = $state([]);
   let shown = $state(PAGE_SIZE);
   let merging = $state<string | null>(null);
-  // candidates the user ticked or unticked, overriding the default
+  let computedAt = $state<string>();
+  // pairs the user ticked or unticked, overriding the default; per pair so a tick never follows a person elsewhere
   const ticked = new SvelteMap<string, boolean>();
 
   const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -49,17 +50,23 @@
     }
   };
 
-  const load = async () => {
+  const load = async ({ refresh = false } = {}) => {
     loading = true;
     try {
-      const params = new URLSearchParams({ threshold: String(threshold), withHidden: String(withHidden) });
+      const params = new URLSearchParams({
+        threshold: String(threshold),
+        withHidden: String(withHidden),
+        refresh: String(refresh),
+      });
       const response = await fetch(`/api/people/merge-suggestions?${params}`);
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         throw new Error(body?.message ?? response.statusText);
       }
       const dismissed = readDismissed();
-      suggestions = ((await response.json()) as Suggestion[])
+      const result = (await response.json()) as { computedAt: string; suggestions: Suggestion[] };
+      computedAt = result.computedAt;
+      suggestions = result.suggestions
         .map((suggestion) => ({
           ...suggestion,
           candidates: suggestion.candidates.filter(
@@ -76,11 +83,17 @@
     }
   };
 
-  onMount(load);
+  onMount(() => load());
 
-  const isTicked = (candidate: Candidate) => ticked.get(candidate.person.id) ?? candidate.similarity >= threshold + 0.1;
+  const isTicked = (suggestion: Suggestion, candidate: Candidate) =>
+    ticked.get(pairKey(suggestion.person.id, candidate.person.id)) ?? candidate.similarity >= threshold + 0.1;
 
   const removePeople = (ids: Set<string>) => {
+    for (const key of ticked.keys()) {
+      if (key.split('|').some((id) => ids.has(id))) {
+        ticked.delete(key);
+      }
+    }
     suggestions = suggestions
       .filter(({ person }) => !ids.has(person.id))
       .map((suggestion) => ({
@@ -93,7 +106,7 @@
   const displayName = (person: PersonResponseDto) => person.name || $t('similar_people_unnamed');
 
   const handleMerge = async (suggestion: Suggestion) => {
-    const picked = suggestion.candidates.filter((candidate) => isTicked(candidate));
+    const picked = suggestion.candidates.filter((candidate) => isTicked(suggestion, candidate));
     const name = suggestion.person.name || $t('similar_people_this_person');
     const confirmed = await modalManager.showDialog({
       title: $t('merge_people'),
@@ -223,7 +236,11 @@
 
 <UserPageLayout
   title={$t('similar_people')}
-  description={loading ? undefined : $t('similar_people_summary', { values: { count: total } })}
+  description={loading || !computedAt
+    ? undefined
+    : `${$t('similar_people_summary', { values: { count: total } })} · ${$t('similar_people_compared_at', {
+        values: { time: new Date(computedAt).toLocaleString($locale, { dateStyle: 'short', timeStyle: 'short' }) },
+      })}`}
 >
   {#snippet buttons()}
     <div class="flex items-center gap-4">
@@ -235,7 +252,7 @@
           max="0.95"
           step="0.01"
           bind:value={threshold}
-          onchange={load}
+          onchange={() => load()}
           class="w-28 accent-immich-primary dark:accent-immich-dark-primary"
         />
         <span class="w-9 tabular-nums">{Math.round(threshold * 100)}%</span>
@@ -250,6 +267,16 @@
         />
         {$t('show_hidden_people')}
       </label>
+      <IconButton
+        shape="round"
+        color="secondary"
+        variant="ghost"
+        aria-label={$t('similar_people_compare_again')}
+        title={$t('similar_people_compare_again')}
+        icon={mdiRefresh}
+        disabled={loading}
+        onclick={() => load({ refresh: true })}
+      />
       <IconButton
         shape="round"
         color="secondary"
@@ -271,7 +298,7 @@
       <Text class="py-20 text-center" color="muted">{$t('similar_people_none')}</Text>
     {:else}
       {#each suggestions.slice(0, shown) as suggestion (suggestion.person.id)}
-        {@const count = suggestion.candidates.filter((candidate) => isTicked(candidate)).length}
+        {@const count = suggestion.candidates.filter((candidate) => isTicked(suggestion, candidate)).length}
         <section class="overflow-hidden rounded-2xl border border-gray-200 dark:border-gray-800">
           <div class="flex flex-wrap items-center gap-3 bg-gray-100 p-3 dark:bg-immich-dark-gray">
             {@render who(suggestion, 64)}
@@ -284,8 +311,10 @@
             <div class="flex flex-wrap items-center gap-3 border-t border-gray-200 p-3 dark:border-gray-800">
               <Checkbox
                 size="tiny"
-                checked={isTicked(candidate)}
-                onCheckedChange={(checked) => ticked.set(candidate.person.id, !!checked)}
+                bind:checked={
+                  () => isTicked(suggestion, candidate),
+                  (checked) => ticked.set(pairKey(suggestion.person.id, candidate.person.id), checked)
+                }
               />
               {@render who(candidate, 48)}
               <div class="w-24 shrink-0 text-end">

@@ -18,8 +18,8 @@ import {
   PeopleUsersUpsertDto,
   PersonCreateDto,
   PersonDeleteDto,
-  PersonMergeSuggestionResponseDto,
   PersonMergeSuggestionSearchDto,
+  PersonMergeSuggestionsResponseDto,
   PersonResponseDto,
   PersonSearchDto,
   PersonStatisticsResponseDto,
@@ -45,7 +45,7 @@ import {
   VectorIndex,
 } from 'src/enum.js';
 import { BoundingBox } from 'src/repositories/machine-learning.repository.js';
-import { PersonId } from 'src/repositories/person.repository.js';
+import { MergeSuggestionPair, PersonId } from 'src/repositories/person.repository.js';
 import { DB } from 'src/schema/index.js';
 import { AssetFaceTable } from 'src/schema/tables/asset-face.table.js';
 import { FaceSearchTable } from 'src/schema/tables/face-search.table.js';
@@ -59,6 +59,13 @@ import { batched, findOrFail, hasSomeDefined, isFacialRecognitionEnabled } from 
 import { Point, transformPoints } from 'src/utils/transform.js';
 
 const personKey = ({ ownerId, personGroupId }: PersonId) => `${ownerId}/${personGroupId}`;
+
+/** lowest similarity the suggestions page offers; pairs are cached down to it so changing the threshold is instant */
+const MERGE_SUGGESTION_MIN_SIMILARITY = 0.4;
+/** older cached suggestions are still served, but recomputed in the background */
+const MERGE_SUGGESTION_MAX_AGE = 6 * 60 * 60 * 1000;
+
+type MergeSuggestionCache = { pairs: MergeSuggestionPair[]; computedAt: Date };
 
 @Injectable()
 export class PersonService extends BaseService {
@@ -88,27 +95,36 @@ export class PersonService extends BaseService {
     };
   }
 
+  // per user, in this API worker's memory: comparing every person with every other takes seconds on large libraries
+  private mergeSuggestionCache = new Map<string, MergeSuggestionCache>();
+  private mergeSuggestionRefreshes = new Map<string, Promise<MergeSuggestionCache>>();
+
   async getMergeSuggestions(
     auth: AuthDto,
-    { threshold, withHidden = false }: PersonMergeSuggestionSearchDto,
-  ): Promise<PersonMergeSuggestionResponseDto[]> {
-    const pairs = await this.personRepository.getMergeSuggestionPairs(auth.user.id, { threshold, withHidden });
+    { threshold, withHidden = false, refresh = false }: PersonMergeSuggestionSearchDto,
+  ): Promise<PersonMergeSuggestionsResponseDto> {
+    const cached = await this.loadMergeSuggestionPairs(auth.user.id, refresh);
+    const computedAt = cached.computedAt.toISOString();
     const faceCounts = new Map<string, number>();
-    for (const pair of pairs) {
+    for (const pair of cached.pairs) {
       faceCounts.set(pair.personGroupId, pair.faceCount);
       faceCounts.set(pair.otherPersonGroupId, pair.otherFaceCount);
     }
     if (faceCounts.size === 0) {
-      return [];
+      return { computedAt, suggestions: [] };
     }
 
-    const ids = faceCounts.keys().toArray();
-    const [people, faces] = await Promise.all([
-      this.personRepository.getByGroupIds(auth.user.id, ids),
-      this.personRepository.getMergeSuggestionFaces(auth.user.id, ids, 4),
-    ]);
+    // names and visibility are read fresh, so renaming, hiding and merging show up without recomputing
+    const people = await this.personRepository.getByGroupIds(auth.user.id, faceCounts.keys().toArray());
     const lookup = new Map(people.map((person) => [person.personGroupId, person]));
-    const facesByPerson = Map.groupBy(faces, (face) => face.personGroupId);
+    const pairs = cached.pairs.filter(({ personGroupId, otherPersonGroupId, similarity }) => {
+      const a = lookup.get(personGroupId);
+      const b = lookup.get(otherPersonGroupId);
+      if (!a || !b || (!withHidden && (a.isHidden || b.isHidden))) {
+        return false;
+      }
+      return similarity >= threshold || (!!a.name && a.name.toLowerCase() === b.name.toLowerCase());
+    });
 
     // named people come first, then the biggest clusters: they are the ones others get merged into
     const compare = (a: string, b: string) => {
@@ -125,9 +141,6 @@ export class PersonService extends BaseService {
     // every person is suggested once, under the most similar person ranked above them
     const best = new Map<string, { targetId: string; similarity: number }>();
     for (const { personGroupId: a, otherPersonGroupId: b, similarity } of pairs) {
-      if (!lookup.has(a) || !lookup.has(b)) {
-        continue;
-      }
       const [targetId, sourceId] = compare(a, b) < 0 ? [a, b] : [b, a];
       const current = best.get(sourceId);
       if (!current || similarity > current.similarity) {
@@ -135,13 +148,18 @@ export class PersonService extends BaseService {
       }
     }
 
+    const groups = Map.groupBy(best, ([, { targetId }]) => targetId);
+    const shownIds = [...groups.keys(), ...best.keys()];
+    const faces =
+      shownIds.length > 0 ? await this.personRepository.getMergeSuggestionFaces(auth.user.id, shownIds, 4) : [];
+    const facesByPerson = Map.groupBy(faces, (face) => face.personGroupId);
+
     const toPerson = (id: string) => ({
       person: mapPerson(lookup.get(id)!),
       faceCount: faceCounts.get(id)!,
       faces: (facesByPerson.get(id) ?? []).map(({ personGroupId: _, ...face }) => face),
     });
-    const groups = Map.groupBy(best, ([, { targetId }]) => targetId);
-    return groups
+    const suggestions = groups
       .keys()
       .toArray()
       .sort(compare)
@@ -152,6 +170,56 @@ export class PersonService extends BaseService {
           .map(([sourceId, { similarity }]) => ({ ...toPerson(sourceId), similarity }))
           .sort((a, b) => b.similarity - a.similarity),
       }));
+    return { computedAt, suggestions };
+  }
+
+  private async loadMergeSuggestionPairs(userId: string, refresh: boolean) {
+    const cached = this.mergeSuggestionCache.get(userId);
+    if (!cached || refresh) {
+      return this.refreshMergeSuggestions(userId);
+    }
+    // stale results are still served right away, newer ones are ready for the next visit
+    if (Date.now() - cached.computedAt.getTime() > MERGE_SUGGESTION_MAX_AGE) {
+      this.refreshMergeSuggestionsInBackground(userId);
+    }
+    return cached;
+  }
+
+  private refreshMergeSuggestions(userId: string) {
+    let refresh = this.mergeSuggestionRefreshes.get(userId);
+    if (!refresh) {
+      refresh = this.personRepository
+        .getMergeSuggestionPairs(userId, { threshold: MERGE_SUGGESTION_MIN_SIMILARITY, withHidden: true })
+        .then((pairs) => {
+          const cached = { pairs, computedAt: new Date() };
+          this.mergeSuggestionCache.set(userId, cached);
+          return cached;
+        })
+        .finally(() => this.mergeSuggestionRefreshes.delete(userId));
+      this.mergeSuggestionRefreshes.set(userId, refresh);
+    }
+    return refresh;
+  }
+
+  private refreshMergeSuggestionsInBackground(userId: string) {
+    this.refreshMergeSuggestions(userId).catch((error) =>
+      this.logger.warn(`Unable to refresh merge suggestions for ${userId}: ${error}`),
+    );
+  }
+
+  /** after people changed, recompute cached suggestions so merged people's new neighbours show up */
+  private invalidateMergeSuggestions(userId: string) {
+    if (!this.mergeSuggestionCache.has(userId) && !this.mergeSuggestionRefreshes.has(userId)) {
+      return;
+    }
+    const inFlight = this.mergeSuggestionRefreshes.get(userId);
+    const refresh = () => this.refreshMergeSuggestionsInBackground(userId);
+    // a refresh that is already running started before this change
+    if (inFlight) {
+      void inFlight.then(refresh).catch(refresh);
+    } else {
+      refresh();
+    }
   }
 
   async reassignFaces(auth: AuthDto, personGroupId: string, dto: AssetFaceUpdateDto): Promise<PersonResponseDto[]> {
@@ -826,6 +894,10 @@ export class PersonService extends BaseService {
     }
 
     await this.personRepository.deleteEmptyGroups();
+
+    for (const ownerId of ownerIds) {
+      this.invalidateMergeSuggestions(ownerId);
+    }
 
     return results.values().toArray();
   }

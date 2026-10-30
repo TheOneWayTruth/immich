@@ -77,11 +77,12 @@ const PersonMergeSuggestionSearchSchema = z
   .object({
     threshold: z.coerce
       .number()
-      .min(0.3)
+      .min(0.4)
       .max(1)
       .default(0.7)
       .describe('Minimum similarity (0-1) of two people to be suggested'),
     withHidden: stringToBool.optional().describe('Include hidden people'),
+    refresh: stringToBool.optional().describe('Compare all people again instead of using the cached result'),
   })
   .meta({ id: 'PersonMergeSuggestionSearchDto' });
 
@@ -196,7 +197,14 @@ const PersonMergeSuggestionResponseSchema = PersonMergeSuggestionPersonSchema.ex
   candidates: z.array(PersonMergeSuggestionCandidateSchema).describe('People that are probably the same person'),
 }).meta({ id: 'PersonMergeSuggestionResponseDto' });
 
-export class PersonMergeSuggestionResponseDto extends createZodDto(PersonMergeSuggestionResponseSchema) {}
+const PersonMergeSuggestionsResponseSchema = z
+  .object({
+    computedAt: z.string().meta({ format: 'date-time' }).describe('When all people were last compared'),
+    suggestions: z.array(PersonMergeSuggestionResponseSchema),
+  })
+  .meta({ id: 'PersonMergeSuggestionsResponseDto' });
+
+export class PersonMergeSuggestionsResponseDto extends createZodDto(PersonMergeSuggestionsResponseSchema) {}
 
 const AssetFaceResponseSchema = z
   .object({

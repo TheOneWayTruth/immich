@@ -2139,6 +2139,8 @@
   "sign_up": "Sign up",
   "similar_people": "Similar people",
   "similar_people_also_named": "Also named, “{name}” is kept",
+  "similar_people_compare_again": "Compare again",
+  "similar_people_compared_at": "compared {time}",
   "similar_people_comparing": "Comparing faces…",
   "similar_people_faces": "{count, plural, one {# face} other {# faces}}",
   "similar_people_merge_confirmation": "Merge {count, plural, one {# person} other {# people}} into {name}? This can't be undone with one click.",

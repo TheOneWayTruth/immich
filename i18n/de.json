@@ -2118,6 +2118,8 @@
   "sign_up": "Registrieren",
   "similar_people": "Ähnliche Personen",
   "similar_people_also_named": "Auch benannt, „{name}“ bleibt",
+  "similar_people_compare_again": "Neu vergleichen",
+  "similar_people_compared_at": "verglichen am {time}",
   "similar_people_comparing": "Gesichter werden verglichen…",
   "similar_people_faces": "{count, plural, one {# Gesicht} other {# Gesichter}}",
   "similar_people_merge_confirmation": "{count, plural, one {# Person} other {# Personen}} mit {name} zusammenführen? Das lässt sich nicht mit einem Klick rückgängig machen.",

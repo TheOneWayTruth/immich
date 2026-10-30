@@ -27,8 +27,8 @@ import {
   PeopleUsersUpsertDto,
   PersonCreateDto,
   PersonDeleteDto,
-  PersonMergeSuggestionResponseDto,
   PersonMergeSuggestionSearchDto,
+  PersonMergeSuggestionsResponseDto,
   PersonResponseDto,
   PersonSearchDto,
   PersonStatisticsResponseDto,
@@ -110,7 +110,7 @@ export class PersonController {
   getMergeSuggestions(
     @Auth() auth: AuthDto,
     @Query() dto: PersonMergeSuggestionSearchDto,
-  ): Promise<PersonMergeSuggestionResponseDto[]> {
+  ): Promise<PersonMergeSuggestionsResponseDto> {
     return this.service.getMergeSuggestions(auth, dto);
   }
 

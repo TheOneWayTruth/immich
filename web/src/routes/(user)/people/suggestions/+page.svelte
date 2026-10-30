@@ -37,7 +37,7 @@
   let shown = $state(PAGE_SIZE);
   let merging = $state<string | null>(null);
   let computedAt = $state<string>();
-  // pairs the user ticked or unticked, overriding the default; per pair so a tick never follows a person elsewhere
+  // pairs the user ticked; per pair so a tick never follows a person elsewhere
   const ticked = new SvelteMap<string, boolean>();
 
   const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -86,7 +86,7 @@
   onMount(() => load());
 
   const isTicked = (suggestion: Suggestion, candidate: Candidate) =>
-    ticked.get(pairKey(suggestion.person.id, candidate.person.id)) ?? candidate.similarity >= threshold + 0.1;
+    ticked.get(pairKey(suggestion.person.id, candidate.person.id)) ?? false;
 
   const removePeople = (ids: Set<string>) => {
     for (const key of ticked.keys()) {

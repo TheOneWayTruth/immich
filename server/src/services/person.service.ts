@@ -18,6 +18,8 @@ import {
   PeopleUsersUpsertDto,
   PersonCreateDto,
   PersonDeleteDto,
+  PersonMergeSuggestionResponseDto,
+  PersonMergeSuggestionSearchDto,
   PersonResponseDto,
   PersonSearchDto,
   PersonStatisticsResponseDto,
@@ -84,6 +86,72 @@ export class PersonService extends BaseService {
       total,
       hidden,
     };
+  }
+
+  async getMergeSuggestions(
+    auth: AuthDto,
+    { threshold, withHidden = false }: PersonMergeSuggestionSearchDto,
+  ): Promise<PersonMergeSuggestionResponseDto[]> {
+    const pairs = await this.personRepository.getMergeSuggestionPairs(auth.user.id, { threshold, withHidden });
+    const faceCounts = new Map<string, number>();
+    for (const pair of pairs) {
+      faceCounts.set(pair.personGroupId, pair.faceCount);
+      faceCounts.set(pair.otherPersonGroupId, pair.otherFaceCount);
+    }
+    if (faceCounts.size === 0) {
+      return [];
+    }
+
+    const ids = faceCounts.keys().toArray();
+    const [people, faces] = await Promise.all([
+      this.personRepository.getByGroupIds(auth.user.id, ids),
+      this.personRepository.getMergeSuggestionFaces(auth.user.id, ids, 4),
+    ]);
+    const lookup = new Map(people.map((person) => [person.personGroupId, person]));
+    const facesByPerson = Map.groupBy(faces, (face) => face.personGroupId);
+
+    // named people come first, then the biggest clusters: they are the ones others get merged into
+    const compare = (a: string, b: string) => {
+      const personA = lookup.get(a)!;
+      const personB = lookup.get(b)!;
+      return (
+        Number(!personA.name) - Number(!personB.name) ||
+        Number(personA.isHidden) - Number(personB.isHidden) ||
+        faceCounts.get(b)! - faceCounts.get(a)! ||
+        a.localeCompare(b)
+      );
+    };
+
+    // every person is suggested once, under the most similar person ranked above them
+    const best = new Map<string, { targetId: string; similarity: number }>();
+    for (const { personGroupId: a, otherPersonGroupId: b, similarity } of pairs) {
+      if (!lookup.has(a) || !lookup.has(b)) {
+        continue;
+      }
+      const [targetId, sourceId] = compare(a, b) < 0 ? [a, b] : [b, a];
+      const current = best.get(sourceId);
+      if (!current || similarity > current.similarity) {
+        best.set(sourceId, { targetId, similarity });
+      }
+    }
+
+    const toPerson = (id: string) => ({
+      person: mapPerson(lookup.get(id)!),
+      faceCount: faceCounts.get(id)!,
+      faces: (facesByPerson.get(id) ?? []).map(({ personGroupId: _, ...face }) => face),
+    });
+    const groups = Map.groupBy(best, ([, { targetId }]) => targetId);
+    return groups
+      .keys()
+      .toArray()
+      .sort(compare)
+      .map((targetId) => ({
+        ...toPerson(targetId),
+        candidates: groups
+          .get(targetId)!
+          .map(([sourceId, { similarity }]) => ({ ...toPerson(sourceId), similarity }))
+          .sort((a, b) => b.similarity - a.similarity),
+      }));
   }
 
   async reassignFaces(auth: AuthDto, personGroupId: string, dto: AssetFaceUpdateDto): Promise<PersonResponseDto[]> {

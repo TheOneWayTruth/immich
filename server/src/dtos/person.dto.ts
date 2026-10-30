@@ -73,6 +73,18 @@ const PersonSearchSchema = z
   })
   .meta({ id: 'PersonSearchDto' });
 
+const PersonMergeSuggestionSearchSchema = z
+  .object({
+    threshold: z.coerce
+      .number()
+      .min(0.3)
+      .max(1)
+      .default(0.7)
+      .describe('Minimum similarity (0-1) of two people to be suggested'),
+    withHidden: stringToBool.optional().describe('Include hidden people'),
+  })
+  .meta({ id: 'PersonMergeSuggestionSearchDto' });
+
 export enum PersonUserRole {
   Read = 'read',
   Write = 'write',
@@ -154,8 +166,37 @@ export class PeopleDeleteDto extends createZodDto(PeopleDeleteSchema) {}
 export class PeopleUpdateDto extends createZodDto(PeopleUpdateSchema) {}
 export class MergePersonDto extends createZodDto(MergePersonSchema) {}
 export class PersonSearchDto extends createZodDto(PersonSearchSchema) {}
+export class PersonMergeSuggestionSearchDto extends createZodDto(PersonMergeSuggestionSearchSchema) {}
 export class PersonResponseDto extends createZodDto(PersonResponseSchema) {}
 export class PeopleUserResponseDto extends createZodDto(PeopleUserResponseSchema) {}
+
+const PersonMergeSuggestionFaceSchema = z
+  .object({
+    assetId: z.uuidv4().describe('Asset ID'),
+    imageWidth: z.int().min(0).describe('Image width in pixels'),
+    imageHeight: z.int().min(0).describe('Image height in pixels'),
+    boundingBoxX1: z.int().describe('Bounding box X1 coordinate'),
+    boundingBoxY1: z.int().describe('Bounding box Y1 coordinate'),
+    boundingBoxX2: z.int().describe('Bounding box X2 coordinate'),
+    boundingBoxY2: z.int().describe('Bounding box Y2 coordinate'),
+  })
+  .meta({ id: 'PersonMergeSuggestionFaceDto' });
+
+const PersonMergeSuggestionPersonSchema = z.object({
+  person: PersonResponseSchema,
+  faceCount: z.int().min(0).describe('Number of faces'),
+  faces: z.array(PersonMergeSuggestionFaceSchema).describe('A few sample faces'),
+});
+
+const PersonMergeSuggestionCandidateSchema = PersonMergeSuggestionPersonSchema.extend({
+  similarity: z.number().describe('Similarity (0-1) to the person they would be merged into'),
+}).meta({ id: 'PersonMergeSuggestionCandidateDto' });
+
+const PersonMergeSuggestionResponseSchema = PersonMergeSuggestionPersonSchema.extend({
+  candidates: z.array(PersonMergeSuggestionCandidateSchema).describe('People that are probably the same person'),
+}).meta({ id: 'PersonMergeSuggestionResponseDto' });
+
+export class PersonMergeSuggestionResponseDto extends createZodDto(PersonMergeSuggestionResponseSchema) {}
 
 const AssetFaceResponseSchema = z
   .object({

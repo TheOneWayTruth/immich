@@ -89,6 +89,30 @@ export interface GetAllFacesOptions {
   clusterGroupId?: string;
 }
 
+export interface MergeSuggestionOptions {
+  threshold: number;
+  withHidden: boolean;
+}
+
+export interface MergeSuggestionPair {
+  personGroupId: string;
+  faceCount: number;
+  otherPersonGroupId: string;
+  otherFaceCount: number;
+  similarity: number;
+}
+
+export interface MergeSuggestionFace {
+  personGroupId: string;
+  assetId: string;
+  imageWidth: number;
+  imageHeight: number;
+  boundingBoxX1: number;
+  boundingBoxY1: number;
+  boundingBoxX2: number;
+  boundingBoxY2: number;
+}
+
 export type UnassignFacesOptions = DeleteFacesOptions & { clusterGroupId?: string };
 
 export type GetFacesOptions = WithPersonOptions & { isVisible?: boolean };
@@ -1005,5 +1029,77 @@ export class PersonRepository {
       .selectAll('person')
       .where('person.personGroupId', 'in', personGroupIds)
       .execute();
+  }
+
+  /**
+   * Pairs of the user's people whose average face embeddings are at least `threshold` similar (cosine),
+   * plus pairs with the same name. Uses the same visibility rules as the people overview.
+   */
+  @GenerateSql({ params: [DummyValue.UUID, { threshold: 0.7, withHidden: false }] })
+  async getMergeSuggestionPairs(userId: string, { threshold, withHidden }: MergeSuggestionOptions) {
+    // halfvec keeps each centroid small enough to stay in memory, which makes the pairwise scan ~4x faster
+    const { rows } = await sql<MergeSuggestionPair>`
+      with "faces" as (
+        select f."personGroupId", count(*)::int as "faceCount", l2_normalize(avg(s.embedding))::halfvec(512) as "centroid"
+        from "asset_face" f
+        inner join "face_search" s on s."faceId" = f."id"
+        where f."personGroupId" in (select "personGroupId" from "person" where "ownerId" = ${userId})
+          and f."deletedAt" is null
+          and f."isVisible" is true
+          and f."assetVisibility" = ${sql.lit(AssetVisibility.Timeline)}
+          and f."assetDeletedAt" is null
+        group by f."personGroupId"
+      ), "people" as materialized (
+        select p."personGroupId", p."name", faces."faceCount", faces."centroid"
+        from "person" p
+        inner join "faces" on faces."personGroupId" = p."personGroupId"
+        where p."ownerId" = ${userId}
+          and (p."name" != '' or faces."faceCount" >= ${minimumFaces(userId)})
+          ${withHidden ? sql`` : sql`and p."isHidden" is false`}
+      )
+      select a."personGroupId", a."faceCount", b."personGroupId" as "otherPersonGroupId", b."faceCount" as "otherFaceCount",
+        -(a."centroid" <#> b."centroid") as "similarity"
+      from "people" a
+      inner join "people" b on a."personGroupId" < b."personGroupId"
+      where (a."centroid" <#> b."centroid") <= ${-threshold}
+      union
+      select a."personGroupId", a."faceCount", b."personGroupId", b."faceCount", -(a."centroid" <#> b."centroid")
+      from "people" a
+      inner join "people" b on a."personGroupId" < b."personGroupId" and lower(a."name") = lower(b."name")
+      where a."name" != ''
+    `.execute(this.db);
+    return rows;
+  }
+
+  @GenerateSql({ params: [DummyValue.UUID, [DummyValue.UUID]] })
+  getByGroupIds(ownerId: string, personGroupIds: string[]) {
+    return this.db
+      .selectFrom('person')
+      .selectAll('person')
+      .where('person.ownerId', '=', ownerId)
+      .where('person.personGroupId', '=', anyUuid(personGroupIds))
+      .execute();
+  }
+
+  /** a few random faces per person on the user's own assets, large enough to be recognizable */
+  @GenerateSql({ params: [DummyValue.UUID, [DummyValue.UUID], 4] })
+  async getMergeSuggestionFaces(ownerId: string, personGroupIds: string[], perPerson: number) {
+    const { rows } = await sql<MergeSuggestionFace>`
+      select "personGroupId", "assetId", "imageWidth", "imageHeight", "boundingBoxX1", "boundingBoxY1", "boundingBoxX2", "boundingBoxY2"
+      from (
+        select f.*, row_number() over (partition by f."personGroupId" order by random()) as "rank"
+        from "asset_face" f
+        where f."personGroupId" = ${anyUuid(personGroupIds)}
+          and f."ownerId" = ${ownerId}
+          and f."deletedAt" is null
+          and f."isVisible" is true
+          and f."assetVisibility" = ${sql.lit(AssetVisibility.Timeline)}
+          and f."assetDeletedAt" is null
+          and f."imageWidth" > 0
+          and f."boundingBoxX2" - f."boundingBoxX1" >= 24
+      ) faces
+      where "rank" <= ${perPerson}
+    `.execute(this.db);
+    return rows;
   }
 }

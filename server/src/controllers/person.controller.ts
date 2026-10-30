@@ -27,6 +27,8 @@ import {
   PeopleUsersUpsertDto,
   PersonCreateDto,
   PersonDeleteDto,
+  PersonMergeSuggestionResponseDto,
+  PersonMergeSuggestionSearchDto,
   PersonResponseDto,
   PersonSearchDto,
   PersonStatisticsResponseDto,
@@ -95,6 +97,21 @@ export class PersonController {
   })
   deletePeople(@Auth() auth: AuthDto, @Body() dto: PeopleDeleteDto): Promise<void> {
     return this.service.deleteAll(auth, dto);
+  }
+
+  @Get('merge-suggestions')
+  @Authenticated({ permission: Permission.PersonRead })
+  @Endpoint({
+    summary: 'Get merge suggestions',
+    description:
+      'Find people that are probably the same person, based on the similarity of their average faces. Each suggestion lists the people that could be merged into one person.',
+    history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
+  })
+  getMergeSuggestions(
+    @Auth() auth: AuthDto,
+    @Query() dto: PersonMergeSuggestionSearchDto,
+  ): Promise<PersonMergeSuggestionResponseDto[]> {
+    return this.service.getMergeSuggestions(auth, dto);
   }
 
   @Get(':id')

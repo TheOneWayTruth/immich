@@ -25,7 +25,7 @@
     type UserResponseDto,
   } from '@immich/sdk';
   import { ActionButton, Button, Icon, IconButton, modalManager } from '@immich/ui';
-  import { mdiAccountOff, mdiEyeOutline, mdiTune } from '@mdi/js';
+  import { mdiAccountMultipleCheckOutline, mdiAccountOff, mdiEyeOutline, mdiTune } from '@mdi/js';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { goto } from '$app/navigation';
@@ -315,6 +315,13 @@
         size="small"
         variant="ghost"
         color="secondary">{$t('show_and_hide_people')}</Button
+      >
+      <Button
+        leadingIcon={mdiAccountMultipleCheckOutline}
+        onclick={() => goto('/people/suggestions')}
+        size="small"
+        variant="ghost"
+        color="secondary">{$t('similar_people')}</Button
       >
       <ActionButton action={ManageAccess} />
       <IconButton

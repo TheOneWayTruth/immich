@@ -174,11 +174,25 @@ export class PersonService extends BaseService {
     }
 
     const groups = Map.groupBy(best, ([, { targetId }]) => targetId);
-    // the page lists the biggest people first, named or not
+    // named people first, then the groups that would gain the most faces by merging
+    const addableFaces = new Map(
+      groups
+        .entries()
+        .map(([targetId, sources]) => [
+          targetId,
+          sources.reduce((sum, [sourceId]) => sum + faceCounts.get(sourceId)!, 0),
+        ]),
+    );
     const targetIds = groups
       .keys()
       .toArray()
-      .sort((a, b) => faceCounts.get(b)! - faceCounts.get(a)! || compare(a, b));
+      .sort(
+        (a, b) =>
+          Number(!lookup.get(a)!.name) - Number(!lookup.get(b)!.name) ||
+          addableFaces.get(b)! - addableFaces.get(a)! ||
+          groups.get(b)!.length - groups.get(a)!.length ||
+          compare(a, b),
+      );
     // only the requested page is sent with sample faces, so even low thresholds load quickly
     const pageIds = targetIds.slice(skip, skip + size);
     const shownIds = pageIds.flatMap((targetId) => [targetId, ...groups.get(targetId)!.map(([sourceId]) => sourceId)]);

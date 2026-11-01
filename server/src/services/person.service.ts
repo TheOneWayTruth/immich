@@ -163,12 +163,15 @@ export class PersonService extends BaseService {
     };
 
     // every person is suggested once, under the most similar person ranked above them that was not
-    // dismissed, so "not the same person" moves them on to their next best match
+    // dismissed, so "not the same person" moves them on to their next best match.
+    // A named match always wins over an unnamed one, even a more similar one: naming is the point of merging.
     const best = new Map<string, { targetId: string; similarity: number }>();
+    const isNamed = (id: string) => !!lookup.get(id)!.name;
     for (const { personGroupId: a, otherPersonGroupId: b, similarity } of pairs) {
       const [targetId, sourceId] = compare(a, b) < 0 ? [a, b] : [b, a];
       const current = best.get(sourceId);
-      if (!current || similarity > current.similarity) {
+      const namedFirst = current ? Number(isNamed(targetId)) - Number(isNamed(current.targetId)) : 1;
+      if (namedFirst > 0 || (namedFirst === 0 && similarity > current!.similarity)) {
         best.set(sourceId, { targetId, similarity });
       }
     }

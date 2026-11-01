@@ -1081,6 +1081,50 @@ export class PersonRepository {
       .execute();
   }
 
+  // "not the same person" answers live in their own table, outside Immich's schema and migrations,
+  // so the official image keeps working on this database (extra tables are ignored by the drift check)
+  private mergeSuggestionDismissalTable?: Promise<unknown>;
+
+  private ensureMergeSuggestionDismissalTable() {
+    this.mergeSuggestionDismissalTable ??= sql`
+      create table if not exists "same_person_dismissal" (
+        "ownerId" uuid not null,
+        "personGroupId" uuid not null,
+        "otherPersonGroupId" uuid not null,
+        "createdAt" timestamp with time zone not null default now(),
+        primary key ("ownerId", "personGroupId", "otherPersonGroupId")
+      )
+    `
+      .execute(this.db)
+      .catch((error) => {
+        this.mergeSuggestionDismissalTable = undefined;
+        throw error;
+      });
+    return this.mergeSuggestionDismissalTable;
+  }
+
+  /** pairs are stored with the smaller id first */
+  async getMergeSuggestionDismissals(ownerId: string) {
+    await this.ensureMergeSuggestionDismissalTable();
+    const { rows } = await sql<{ personGroupId: string; otherPersonGroupId: string }>`
+      select "personGroupId", "otherPersonGroupId" from "same_person_dismissal" where "ownerId" = ${ownerId}
+    `.execute(this.db);
+    return rows;
+  }
+
+  async addMergeSuggestionDismissals(ownerId: string, pairs: Array<[string, string]>) {
+    if (pairs.length === 0) {
+      return;
+    }
+    await this.ensureMergeSuggestionDismissalTable();
+    await sql`
+      insert into "same_person_dismissal" ("ownerId", "personGroupId", "otherPersonGroupId")
+      select ${ownerId}, pair."personGroupId", pair."otherPersonGroupId"
+      from unnest(${pairs.map(([a]) => a)}::uuid[], ${pairs.map(([, b]) => b)}::uuid[]) as pair("personGroupId", "otherPersonGroupId")
+      on conflict do nothing
+    `.execute(this.db);
+  }
+
   /** a few random faces per person on the user's own assets, large enough to be recognizable */
   @GenerateSql({ params: [DummyValue.UUID, [DummyValue.UUID], 4] })
   async getMergeSuggestionFaces(ownerId: string, personGroupIds: string[], perPerson: number) {

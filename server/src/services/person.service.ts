@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Insertable } from 'kysely';
 import { isUndefined, omitBy } from 'lodash-es';
-import { Chunked, OnJob } from 'src/decorators.js';
+import { Chunked, OnEvent, OnJob } from 'src/decorators.js';
 import { BulkIdErrorReason, BulkIdResponseDto } from 'src/dtos/asset-ids.response.dto.js';
 import { AuthDto } from 'src/dtos/auth.dto.js';
 import {
@@ -17,6 +17,7 @@ import {
   PeopleUsersUpsertDto,
   PersonCreateDto,
   PersonDeleteDto,
+  PersonMergeSuggestionDismissDto,
   PersonMergeSuggestionSearchDto,
   PersonMergeSuggestionsResponseDto,
   PersonResponseDto,
@@ -34,6 +35,7 @@ import {
   AssetVisibility,
   CacheControl,
   DatabaseLock,
+  ImmichWorker,
   JobName,
   JobStatus,
   Permission,
@@ -67,6 +69,8 @@ const MERGE_SUGGESTION_MAX_AGE = 6 * 60 * 60 * 1000;
 
 type MergeSuggestionCache = { pairs: MergeSuggestionPair[]; computedAt: Date };
 
+const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
 @Injectable()
 export class PersonService extends BaseService {
   async getAll(auth: AuthDto, dto: PersonSearchDto): Promise<PeopleResponseDto> {
@@ -98,20 +102,37 @@ export class PersonService extends BaseService {
   // per user, in this API worker's memory: comparing every person with every other takes seconds on large libraries
   private mergeSuggestionCache = new Map<string, MergeSuggestionCache>();
   private mergeSuggestionRefreshes = new Map<string, Promise<MergeSuggestionCache>>();
+  // users whose people changed while a refresh was already running
+  private mergeSuggestionStale = new Set<string>();
+
+  /** compare everyone once at startup, so the first visit of the suggestions page does not wait for it */
+  @OnEvent({ name: 'AppBootstrap', workers: [ImmichWorker.Api] })
+  async onBootstrapWarmMergeSuggestions() {
+    const users = await this.userRepository.getList();
+    for (const user of users) {
+      this.refreshMergeSuggestionsInBackground(user.id);
+    }
+  }
 
   async getMergeSuggestions(
     auth: AuthDto,
-    { threshold, withHidden = false, refresh = false }: PersonMergeSuggestionSearchDto,
+    { threshold, withHidden = false, refresh = false, skip, size }: PersonMergeSuggestionSearchDto,
   ): Promise<PersonMergeSuggestionsResponseDto> {
-    const cached = await this.loadMergeSuggestionPairs(auth.user.id, refresh);
+    const [cached, dismissals] = await Promise.all([
+      this.loadMergeSuggestionPairs(auth.user.id, refresh),
+      this.personRepository.getMergeSuggestionDismissals(auth.user.id),
+    ]);
     const computedAt = cached.computedAt.toISOString();
+    const dismissed = new Set(
+      dismissals.map(({ personGroupId, otherPersonGroupId }) => pairKey(personGroupId, otherPersonGroupId)),
+    );
     const faceCounts = new Map<string, number>();
     for (const pair of cached.pairs) {
       faceCounts.set(pair.personGroupId, pair.faceCount);
       faceCounts.set(pair.otherPersonGroupId, pair.otherFaceCount);
     }
     if (faceCounts.size === 0) {
-      return { computedAt, suggestions: [] };
+      return { computedAt, suggestions: [], total: 0, candidateCount: 0 };
     }
 
     // names and visibility are read fresh, so renaming, hiding and merging show up without recomputing
@@ -121,6 +142,9 @@ export class PersonService extends BaseService {
       const a = lookup.get(personGroupId);
       const b = lookup.get(otherPersonGroupId);
       if (!a || !b || (!withHidden && (a.isHidden || b.isHidden))) {
+        return false;
+      }
+      if (dismissed.has(pairKey(personGroupId, otherPersonGroupId))) {
         return false;
       }
       return similarity >= threshold || (!!a.name && a.name.toLowerCase() === b.name.toLowerCase());
@@ -138,7 +162,8 @@ export class PersonService extends BaseService {
       );
     };
 
-    // every person is suggested once, under the most similar person ranked above them
+    // every person is suggested once, under the most similar person ranked above them that was not
+    // dismissed, so "not the same person" moves them on to their next best match
     const best = new Map<string, { targetId: string; similarity: number }>();
     for (const { personGroupId: a, otherPersonGroupId: b, similarity } of pairs) {
       const [targetId, sourceId] = compare(a, b) < 0 ? [a, b] : [b, a];
@@ -149,7 +174,10 @@ export class PersonService extends BaseService {
     }
 
     const groups = Map.groupBy(best, ([, { targetId }]) => targetId);
-    const shownIds = [...groups.keys(), ...best.keys()];
+    const targetIds = groups.keys().toArray().sort(compare);
+    // only the requested page is sent with sample faces, so even low thresholds load quickly
+    const pageIds = targetIds.slice(skip, skip + size);
+    const shownIds = pageIds.flatMap((targetId) => [targetId, ...groups.get(targetId)!.map(([sourceId]) => sourceId)]);
     const faces =
       shownIds.length > 0 ? await this.personRepository.getMergeSuggestionFaces(auth.user.id, shownIds, 4) : [];
     const facesByPerson = Map.groupBy(faces, (face) => face.personGroupId);
@@ -159,18 +187,25 @@ export class PersonService extends BaseService {
       faceCount: faceCounts.get(id)!,
       faces: (facesByPerson.get(id) ?? []).map(({ personGroupId: _, ...face }) => face),
     });
-    const suggestions = groups
-      .keys()
-      .toArray()
-      .sort(compare)
-      .map((targetId) => ({
-        ...toPerson(targetId),
-        candidates: groups
-          .get(targetId)!
-          .map(([sourceId, { similarity }]) => ({ ...toPerson(sourceId), similarity }))
-          .sort((a, b) => b.similarity - a.similarity),
-      }));
-    return { computedAt, suggestions };
+    const suggestions = pageIds.map((targetId) => ({
+      ...toPerson(targetId),
+      candidates: groups
+        .get(targetId)!
+        .map(([sourceId, { similarity }]) => ({ ...toPerson(sourceId), similarity }))
+        .sort((a, b) => b.similarity - a.similarity),
+    }));
+    return { computedAt, suggestions, total: targetIds.length, candidateCount: best.size };
+  }
+
+  async dismissMergeSuggestions(auth: AuthDto, { pairs }: PersonMergeSuggestionDismissDto): Promise<void> {
+    await this.personRepository.addMergeSuggestionDismissals(
+      auth.user.id,
+      pairs
+        .filter(({ personId, otherPersonId }) => personId !== otherPersonId)
+        .map(({ personId, otherPersonId }) =>
+          personId < otherPersonId ? [personId, otherPersonId] : [otherPersonId, personId],
+        ),
+    );
   }
 
   private async loadMergeSuggestionPairs(userId: string, refresh: boolean) {
@@ -188,6 +223,7 @@ export class PersonService extends BaseService {
   private refreshMergeSuggestions(userId: string) {
     let refresh = this.mergeSuggestionRefreshes.get(userId);
     if (!refresh) {
+      this.mergeSuggestionStale.delete(userId);
       refresh = this.personRepository
         .getMergeSuggestionPairs(userId, { threshold: MERGE_SUGGESTION_MIN_SIMILARITY, withHidden: true })
         .then((pairs) => {
@@ -195,7 +231,12 @@ export class PersonService extends BaseService {
           this.mergeSuggestionCache.set(userId, cached);
           return cached;
         })
-        .finally(() => this.mergeSuggestionRefreshes.delete(userId));
+        .finally(() => {
+          this.mergeSuggestionRefreshes.delete(userId);
+          if (this.mergeSuggestionStale.has(userId)) {
+            this.refreshMergeSuggestionsInBackground(userId);
+          }
+        });
       this.mergeSuggestionRefreshes.set(userId, refresh);
     }
     return refresh;
@@ -212,13 +253,12 @@ export class PersonService extends BaseService {
     if (!this.mergeSuggestionCache.has(userId) && !this.mergeSuggestionRefreshes.has(userId)) {
       return;
     }
-    const inFlight = this.mergeSuggestionRefreshes.get(userId);
-    const refresh = () => this.refreshMergeSuggestionsInBackground(userId);
-    // a refresh that is already running started before this change
-    if (inFlight) {
-      void inFlight.then(refresh).catch(refresh);
+    // a refresh that is already running started before this change: one more after it covers every
+    // change until then, instead of queueing a full comparison per merge
+    if (this.mergeSuggestionRefreshes.has(userId)) {
+      this.mergeSuggestionStale.add(userId);
     } else {
-      refresh();
+      this.refreshMergeSuggestionsInBackground(userId);
     }
   }
 

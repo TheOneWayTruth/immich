@@ -27,6 +27,7 @@ import {
   PeopleUsersUpsertDto,
   PersonCreateDto,
   PersonDeleteDto,
+  PersonMergeSuggestionDismissDto,
   PersonMergeSuggestionSearchDto,
   PersonMergeSuggestionsResponseDto,
   PersonResponseDto,
@@ -112,6 +113,18 @@ export class PersonController {
     @Query() dto: PersonMergeSuggestionSearchDto,
   ): Promise<PersonMergeSuggestionsResponseDto> {
     return this.service.getMergeSuggestions(auth, dto);
+  }
+
+  @Post('merge-suggestions/dismissals')
+  @Authenticated({ permission: Permission.PersonUpdate })
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Endpoint({
+    summary: 'Dismiss merge suggestions',
+    description: 'Remember that pairs of people are not the same person, so they are no longer suggested for merging.',
+    history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
+  })
+  dismissMergeSuggestions(@Auth() auth: AuthDto, @Body() dto: PersonMergeSuggestionDismissDto): Promise<void> {
+    return this.service.dismissMergeSuggestions(auth, dto);
   }
 
   @Get(':id')

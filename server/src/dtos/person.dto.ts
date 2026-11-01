@@ -83,8 +83,24 @@ const PersonMergeSuggestionSearchSchema = z
       .describe('Minimum similarity (0-1) of two people to be suggested'),
     withHidden: stringToBool.optional().describe('Include hidden people'),
     refresh: stringToBool.optional().describe('Compare all people again instead of using the cached result'),
+    skip: z.coerce.number().int().min(0).default(0).describe('Number of suggestions to skip'),
+    size: z.coerce.number().int().min(1).max(200).default(20).describe('Number of suggestions to return'),
   })
   .meta({ id: 'PersonMergeSuggestionSearchDto' });
+
+const PersonMergeSuggestionDismissSchema = z
+  .object({
+    pairs: z
+      .array(
+        z.object({
+          personId: z.uuidv4().describe('Person ID'),
+          otherPersonId: z.uuidv4().describe('ID of the person that is not the same'),
+        }),
+      )
+      .max(10_000)
+      .describe('Pairs of people that are not the same person'),
+  })
+  .meta({ id: 'PersonMergeSuggestionDismissDto' });
 
 export enum PersonUserRole {
   Read = 'read',
@@ -168,6 +184,7 @@ export class PeopleUpdateDto extends createZodDto(PeopleUpdateSchema) {}
 export class MergePersonDto extends createZodDto(MergePersonSchema) {}
 export class PersonSearchDto extends createZodDto(PersonSearchSchema) {}
 export class PersonMergeSuggestionSearchDto extends createZodDto(PersonMergeSuggestionSearchSchema) {}
+export class PersonMergeSuggestionDismissDto extends createZodDto(PersonMergeSuggestionDismissSchema) {}
 export class PersonResponseDto extends createZodDto(PersonResponseSchema) {}
 export class PeopleUserResponseDto extends createZodDto(PeopleUserResponseSchema) {}
 
@@ -201,6 +218,8 @@ const PersonMergeSuggestionsResponseSchema = z
   .object({
     computedAt: z.string().meta({ format: 'date-time' }).describe('When all people were last compared'),
     suggestions: z.array(PersonMergeSuggestionResponseSchema),
+    total: z.int().min(0).describe('Number of suggestions, without skip and size'),
+    candidateCount: z.int().min(0).describe('Number of people suggested for merging, in all suggestions'),
   })
   .meta({ id: 'PersonMergeSuggestionsResponseDto' });
 

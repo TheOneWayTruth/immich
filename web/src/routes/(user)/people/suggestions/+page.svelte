@@ -26,15 +26,21 @@
   type Candidate = SuggestionPerson & { similarity: number };
   type Suggestion = SuggestionPerson & { candidates: Candidate[] };
 
+  type SuggestionPage = { computedAt: string; suggestions: Suggestion[]; total: number; candidateCount: number };
+
   const PAGE_SIZE = 20;
-  const DISMISSED_KEY = 'similar-people-dismissed';
+  // "not the same" answers used to be kept in the browser; they are moved to the server once
+  const LEGACY_DISMISSED_KEY = 'similar-people-dismissed';
   const FACE_SIZE = 56;
 
   let threshold = $state(0.7);
   let withHidden = $state(false);
   let loading = $state(true);
+  let loadingMore = $state(false);
   let suggestions: Suggestion[] = $state([]);
-  let shown = $state(PAGE_SIZE);
+  // suggestions on the server that are not loaded yet
+  let remaining = $state(0);
+  let candidateCount = $state(0);
   let merging = $state<string | null>(null);
   let computedAt = $state<string>();
   // pairs the user ticked; per pair so a tick never follows a person elsewhere
@@ -42,39 +48,55 @@
 
   const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
-  const readDismissed = (): Set<string> => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? '[]'));
-    } catch {
-      return new Set();
+  const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
+    const response = await fetch(`/api/people/merge-suggestions${path}`, init);
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.message ?? response.statusText);
     }
+    return (response.status === 204 ? undefined : await response.json()) as T;
+  };
+
+  const dismiss = (pairs: Array<{ personId: string; otherPersonId: string }>) =>
+    api<void>('/dismissals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairs }),
+    });
+
+  const moveLegacyDismissals = async () => {
+    try {
+      const keys: string[] = JSON.parse(localStorage.getItem(LEGACY_DISMISSED_KEY) ?? '[]');
+      if (keys.length > 0) {
+        await dismiss(
+          keys.map((key) => key.split('|')).map(([personId, otherPersonId]) => ({ personId, otherPersonId })),
+        );
+      }
+      localStorage.removeItem(LEGACY_DISMISSED_KEY);
+    } catch {
+      // kept in the browser, tried again next visit
+    }
+  };
+
+  const fetchPage = (skip: number, refresh = false) => {
+    const params = new URLSearchParams({
+      threshold: String(threshold),
+      withHidden: String(withHidden),
+      refresh: String(refresh),
+      skip: String(skip),
+      size: String(PAGE_SIZE),
+    });
+    return api<SuggestionPage>(`?${params}`);
   };
 
   const load = async ({ refresh = false } = {}) => {
     loading = true;
     try {
-      const params = new URLSearchParams({
-        threshold: String(threshold),
-        withHidden: String(withHidden),
-        refresh: String(refresh),
-      });
-      const response = await fetch(`/api/people/merge-suggestions?${params}`);
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.message ?? response.statusText);
-      }
-      const dismissed = readDismissed();
-      const result = (await response.json()) as { computedAt: string; suggestions: Suggestion[] };
-      computedAt = result.computedAt;
-      suggestions = result.suggestions
-        .map((suggestion) => ({
-          ...suggestion,
-          candidates: suggestion.candidates.filter(
-            ({ person }) => !dismissed.has(pairKey(suggestion.person.id, person.id)),
-          ),
-        }))
-        .filter(({ candidates }) => candidates.length > 0);
-      shown = PAGE_SIZE;
+      const page = await fetchPage(0, refresh);
+      computedAt = page.computedAt;
+      suggestions = page.suggestions;
+      remaining = page.total - page.suggestions.length;
+      candidateCount = page.candidateCount;
       ticked.clear();
     } catch (error) {
       handleError(error, $t('errors.failed_to_load_people'));
@@ -83,7 +105,36 @@
     }
   };
 
-  onMount(() => load());
+  const loadMore = async () => {
+    loadingMore = true;
+    try {
+      // suggestions handled on this page are gone on the server too, so the loaded count is the offset
+      const page = await fetchPage(suggestions.length);
+      const loaded = new Set(
+        suggestions.flatMap(({ person, candidates }) => [person.id, ...candidates.map((c) => c.person.id)]),
+      );
+      const added = page.suggestions.filter(({ person }) => !loaded.has(person.id));
+      suggestions = [...suggestions, ...added];
+      remaining = Math.max(page.total - suggestions.length, 0);
+      candidateCount = page.candidateCount;
+    } catch (error) {
+      handleError(error, $t('errors.failed_to_load_people'));
+    } finally {
+      loadingMore = false;
+    }
+  };
+
+  // keep the page filled while working through it; call once the server has the change
+  const topUp = async () => {
+    if (suggestions.length < PAGE_SIZE / 2 && remaining > 0 && !loadingMore) {
+      await loadMore();
+    }
+  };
+
+  onMount(async () => {
+    await moveLegacyDismissals();
+    await load();
+  });
 
   const isTicked = (suggestion: Suggestion, candidate: Candidate) =>
     ticked.get(pairKey(suggestion.person.id, candidate.person.id)) ?? false;
@@ -94,6 +145,11 @@
         ticked.delete(key);
       }
     }
+    candidateCount -= suggestions.reduce(
+      (sum, { person, candidates }) =>
+        sum + (ids.has(person.id) ? candidates.length : candidates.filter((c) => ids.has(c.person.id)).length),
+      0,
+    );
     suggestions = suggestions
       .filter(({ person }) => !ids.has(person.id))
       .map((suggestion) => ({
@@ -117,45 +173,66 @@
       return;
     }
 
-    merging = suggestion.person.id;
+    // the picked people disappear right away; merging many faces can take a while on the server
+    const targetId = suggestion.person.id;
+    const pickedIds = new Set(picked.map(({ person }) => person.id));
+    removePeople(pickedIds);
+    const shownTarget = () => suggestions.find(({ person }) => person.id === targetId);
+    const kept = shownTarget();
+    if (kept) {
+      kept.faceCount += picked.reduce((sum, { faceCount }) => sum + faceCount, 0);
+    }
+
+    merging = targetId;
     try {
-      const results = await mergePeople({
-        mergePersonDto: { ids: [suggestion.person.id, ...picked.map(({ person }) => person.id)] },
-      });
-      const merged = new Set(
-        results.filter(({ id, success }) => success && id !== suggestion.person.id).map(({ id }) => id),
-      );
-      const target = await getPerson({ id: suggestion.person.id });
-      suggestion.person = target;
-      suggestion.faceCount += picked
-        .filter(({ person }) => merged.has(person.id))
-        .reduce((sum, { faceCount }) => sum + faceCount, 0);
-      removePeople(merged);
+      const results = await mergePeople({ mergePersonDto: { ids: [targetId, ...pickedIds] } });
+      const merged = results.filter(({ id, success }) => success && id !== targetId).length;
+      const target = await getPerson({ id: targetId });
+      const shown = shownTarget();
+      if (shown) {
+        shown.person = target;
+      }
       toastManager.primary(
         $t('similar_people_merged', {
-          values: { count: merged.size, name: target.name || $t('similar_people_this_person') },
+          values: { count: merged, name: target.name || $t('similar_people_this_person') },
         }),
       );
-      if (merged.size < picked.length) {
+      if (merged < picked.length) {
         toastManager.warning($t('errors.something_went_wrong'));
+        await load();
+      } else {
+        await topUp();
       }
     } catch (error) {
       handleError(error, $t('errors.something_went_wrong'));
+      await load();
     } finally {
       merging = null;
     }
   };
 
-  const handleNotSame = (suggestion: Suggestion, candidate: Candidate) => {
-    const dismissed = readDismissed();
-    dismissed.add(pairKey(suggestion.person.id, candidate.person.id));
+  const handleNotSame = async (suggestion: Suggestion, candidate: Candidate) => {
+    removePair(suggestion, candidate);
     try {
-      localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissed]));
-    } catch {
-      // still hidden for this visit
+      await dismiss([{ personId: suggestion.person.id, otherPersonId: candidate.person.id }]);
+      await topUp();
+    } catch (error) {
+      handleError(error, $t('errors.something_went_wrong'));
+      await load();
     }
-    suggestion.candidates = suggestion.candidates.filter(({ person }) => person.id !== candidate.person.id);
-    suggestions = suggestions.filter(({ candidates }) => candidates.length > 0);
+  };
+
+  // only this pair goes away: the candidate may still be suggested under another person
+  const removePair = (suggestion: Suggestion, candidate: Candidate) => {
+    ticked.delete(pairKey(suggestion.person.id, candidate.person.id));
+    candidateCount -= 1;
+    suggestions = suggestions
+      .map((entry) =>
+        entry.person.id === suggestion.person.id
+          ? { ...entry, candidates: entry.candidates.filter(({ person }) => person.id !== candidate.person.id) }
+          : entry,
+      )
+      .filter(({ candidates }) => candidates.length > 0);
   };
 
   const handleHide = async (candidate: Candidate) => {
@@ -166,6 +243,7 @@
         candidate.person.isHidden = true;
       } else {
         removePeople(new Set([candidate.person.id]));
+        await topUp();
       }
     } catch (error) {
       handleError(error, $t('errors.unable_to_hide_person'));
@@ -185,8 +263,6 @@
       `top: ${-(centerY - side / 2) * scale}px`,
     ].join('; ');
   };
-
-  const total = $derived(suggestions.reduce((sum, { candidates }) => sum + candidates.length, 0));
 </script>
 
 {#snippet faces(entry: SuggestionPerson)}
@@ -238,7 +314,7 @@
   title={$t('similar_people')}
   description={loading || !computedAt
     ? undefined
-    : `${$t('similar_people_summary', { values: { count: total } })} · ${$t('similar_people_compared_at', {
+    : `${$t('similar_people_summary', { values: { count: candidateCount } })} · ${$t('similar_people_compared_at', {
         values: { time: new Date(computedAt).toLocaleString($locale, { dateStyle: 'short', timeStyle: 'short' }) },
       })}`}
 >
@@ -297,7 +373,7 @@
     {:else if suggestions.length === 0}
       <Text class="py-20 text-center" color="muted">{$t('similar_people_none')}</Text>
     {:else}
-      {#each suggestions.slice(0, shown) as suggestion (suggestion.person.id)}
+      {#each suggestions as suggestion (suggestion.person.id)}
         {@const count = suggestion.candidates.filter((candidate) => isTicked(suggestion, candidate)).length}
         <section class="overflow-hidden rounded-2xl border border-gray-200 dark:border-gray-800">
           <div class="flex flex-wrap items-center gap-3 bg-gray-100 p-3 dark:bg-immich-dark-gray">
@@ -361,10 +437,10 @@
         </section>
       {/each}
 
-      {#if shown < suggestions.length}
+      {#if remaining > 0}
         <div class="flex justify-center">
-          <Button variant="ghost" onclick={() => (shown += PAGE_SIZE)}>
-            {(suggestions.length - shown).toLocaleString($locale)} …
+          <Button variant="ghost" loading={loadingMore} onclick={loadMore}>
+            {remaining.toLocaleString($locale)} …
           </Button>
         </div>
       {/if}

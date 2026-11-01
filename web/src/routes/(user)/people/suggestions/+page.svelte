@@ -267,7 +267,7 @@
 
 {#snippet faces(entry: SuggestionPerson)}
   <div class="flex min-w-0 flex-1 gap-1 overflow-hidden">
-    {#each entry.faces as face (face.assetId)}
+    {#each entry.faces as face, index (`${index}:${face.assetId}`)}
       <a
         href="/photos/{face.assetId}"
         target="_blank"

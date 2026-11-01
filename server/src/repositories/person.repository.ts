@@ -1125,22 +1125,29 @@ export class PersonRepository {
     `.execute(this.db);
   }
 
-  /** a few random faces per person on the user's own assets, large enough to be recognizable */
+  /**
+   * a few random faces per person on the user's own assets, large enough to be recognizable,
+   * each from a different asset: after merging, one person can have several faces in the same photo
+   */
   @GenerateSql({ params: [DummyValue.UUID, [DummyValue.UUID], 4] })
   async getMergeSuggestionFaces(ownerId: string, personGroupIds: string[], perPerson: number) {
     const { rows } = await sql<MergeSuggestionFace>`
       select "personGroupId", "assetId", "imageWidth", "imageHeight", "boundingBoxX1", "boundingBoxY1", "boundingBoxX2", "boundingBoxY2"
       from (
-        select f.*, row_number() over (partition by f."personGroupId" order by random()) as "rank"
-        from "asset_face" f
-        where f."personGroupId" = ${anyUuid(personGroupIds)}
-          and f."ownerId" = ${ownerId}
-          and f."deletedAt" is null
-          and f."isVisible" is true
-          and f."assetVisibility" = ${sql.lit(AssetVisibility.Timeline)}
-          and f."assetDeletedAt" is null
-          and f."imageWidth" > 0
-          and f."boundingBoxX2" - f."boundingBoxX1" >= 24
+        select assets.*, row_number() over (partition by assets."personGroupId" order by random()) as "rank"
+        from (
+          select distinct on (f."personGroupId", f."assetId") f.*
+          from "asset_face" f
+          where f."personGroupId" = ${anyUuid(personGroupIds)}
+            and f."ownerId" = ${ownerId}
+            and f."deletedAt" is null
+            and f."isVisible" is true
+            and f."assetVisibility" = ${sql.lit(AssetVisibility.Timeline)}
+            and f."assetDeletedAt" is null
+            and f."imageWidth" > 0
+            and f."boundingBoxX2" - f."boundingBoxX1" >= 24
+          order by f."personGroupId", f."assetId", random()
+        ) assets
       ) faces
       where "rank" <= ${perPerson}
     `.execute(this.db);

@@ -17,6 +17,7 @@
     mdiArchiveArrowDownOutline,
     mdiCards,
     mdiCardsOutline,
+    mdiFamilyTree,
     mdiFolderOutline,
     mdiHeart,
     mdiHeartOutline,
@@ -58,6 +59,7 @@
 
   {#if authManager.preferences.people.enabled && authManager.preferences.people.sidebarWeb}
     <NavbarItem title={$t('people')} href={Route.people()} icon={mdiAccountOutline} activeIcon={mdiAccount} />
+    <NavbarItem title={$t('family_tree')} href={Route.family()} icon={mdiFamilyTree} />
   {/if}
 
   {#if authManager.preferences.sharedLinks.enabled && authManager.preferences.sharedLinks.sidebarWeb}

@@ -51,6 +51,7 @@
     mdiArrowLeft,
     mdiDotsVertical,
     mdiFaceRecognition,
+    mdiFamilyTree,
     mdiPencilOutline,
   } from '@mdi/js';
   import { DateTime } from 'luxon';
@@ -339,6 +340,11 @@
     icon: mdiFaceRecognition,
     onAction: () => goto(Route.sortPersonFaces(person)),
   };
+  const FamilyTree: ActionItem = {
+    title: $t('family_tree'),
+    icon: mdiFamilyTree,
+    onAction: () => goto(Route.family({ personId: person.id })),
+  };
 </script>
 
 <OnEvents
@@ -535,7 +541,7 @@
         {#snippet trailing()}
           <ActionButton action={Access} />
           <ContextMenuButton
-            items={[SelectFeaturePhoto, Edit, HidePerson, ShowPerson, Merge, SortFaces, Favorite, Unfavorite]}
+            items={[SelectFeaturePhoto, Edit, HidePerson, ShowPerson, Merge, SortFaces, FamilyTree, Favorite, Unfavorite]}
             aria-label={$t('open')}
           />
         {/snippet}

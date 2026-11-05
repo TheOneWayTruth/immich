@@ -61,7 +61,56 @@ const createTables = [
     )
   `,
   sql`create index if not exists "family_link_ownerId_idx" on "family_link" ("ownerId")`,
+  sql`create table if not exists "family_migration" ("name" text primary key)`,
 ];
+
+/**
+ * a child with one known parent whose parent has exactly one partner gets that partner as second parent,
+ * so the children of a couple are siblings by default
+ */
+const completeParents = (where: ReturnType<typeof sql>) => sql`
+  with "single_parent" as (
+    select "ownerId", "toId" as "childId", min("fromId"::text)::uuid as "parentId"
+    from "family_link"
+    where "type" = 'parent' and ${where}
+    group by "ownerId", "toId"
+    having count(*) = 1
+  ),
+  "partner_pair" as (
+    select "ownerId", "fromId" as "id", "toId" as "partnerId" from "family_link" where "type" = 'partner'
+    union
+    select "ownerId", "toId", "fromId" from "family_link" where "type" = 'partner'
+  ),
+  "only_partner" as (
+    select "ownerId", "id", min("partnerId"::text)::uuid as "partnerId"
+    from "partner_pair"
+    group by "ownerId", "id"
+    having count(*) = 1
+  )
+  insert into "family_link" ("ownerId", "type", "fromId", "toId")
+  select s."ownerId", 'parent', p."partnerId", s."childId"
+  from "single_parent" s
+  join "only_partner" p on p."ownerId" = s."ownerId" and p."id" = s."parentId"
+  where p."partnerId" != s."childId"
+    and not exists (
+      select from "family_link" c where c."type" = 'parent' and c."fromId" = s."childId" and c."toId" = p."partnerId"
+    )
+  on conflict do nothing
+`;
+
+/** inserts a partner link for every two parents of the given children, so parents are partners by default */
+const linkCoParents = (where: ReturnType<typeof sql>) => sql`
+  insert into "family_link" ("ownerId", "type", "fromId", "toId")
+  select distinct a."ownerId", 'partner', a."fromId", b."fromId"
+  from "family_link" a
+  join "family_link" b on b."toId" = a."toId" and b."type" = 'parent' and a."fromId" < b."fromId"
+  where a."type" = 'parent' and ${where}
+    and not exists (
+      select from "family_link" p
+      where p."type" = 'partner' and p."fromId" = b."fromId" and p."toId" = a."fromId"
+    )
+  on conflict do nothing
+`;
 
 @Injectable()
 export class FamilyRepository {
@@ -73,6 +122,19 @@ export class FamilyRepository {
     this.tables ??= (async () => {
       for (const statement of createTables) {
         await statement.execute(this.db);
+      }
+      // trees made before these defaults get the links once; links removed later stay removed
+      const migrations = [
+        { name: 'children-of-a-couple-are-siblings', statement: completeParents(sql`true`) },
+        { name: 'co-parents-are-partners', statement: linkCoParents(sql`true`) },
+      ];
+      for (const { name, statement } of migrations) {
+        const { rows } = await sql`
+          insert into "family_migration" ("name") values (${name}) on conflict do nothing returning "name"
+        `.execute(this.db);
+        if (rows.length > 0) {
+          await statement.execute(this.db);
+        }
       }
     })().catch((error) => {
       this.tables = undefined;
@@ -166,6 +228,22 @@ export class FamilyRepository {
       values (${ownerId}, ${type}, ${fromId}, ${toId})
       on conflict do nothing
     `.execute(this.db);
+  }
+
+  async completeParents(ownerId: string, childIds: string[]) {
+    if (childIds.length === 0) {
+      return;
+    }
+    await this.ensureTables();
+    await completeParents(sql`"ownerId" = ${ownerId} and "toId" = any(${childIds}::uuid[])`).execute(this.db);
+  }
+
+  async linkCoParents(ownerId: string, childIds: string[]) {
+    if (childIds.length === 0) {
+      return;
+    }
+    await this.ensureTables();
+    await linkCoParents(sql`a."ownerId" = ${ownerId} and a."toId" = any(${childIds}::uuid[])`).execute(this.db);
   }
 
   async removeLink(ownerId: string, { type, fromId, toId }: FamilyLink) {

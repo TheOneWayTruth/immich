@@ -22,16 +22,16 @@
   const { graph, memberId, nameOf, onClose }: Props = $props();
 
   const choices: Array<{ value: string; relation: FamilyRelation; key: Translations; gender?: FamilyGender }> = [
+    { value: 'parent', relation: 'parent', key: 'family_rel_parent' },
     { value: 'mother', relation: 'parent', key: 'family_rel_parent', gender: 'female' },
     { value: 'father', relation: 'parent', key: 'family_rel_parent', gender: 'male' },
+    { value: 'sibling', relation: 'sibling', key: 'family_rel_sibling' },
     { value: 'sister', relation: 'sibling', key: 'family_rel_sibling', gender: 'female' },
     { value: 'brother', relation: 'sibling', key: 'family_rel_sibling', gender: 'male' },
+    { value: 'child', relation: 'child', key: 'family_rel_child' },
     { value: 'daughter', relation: 'child', key: 'family_rel_child', gender: 'female' },
     { value: 'son', relation: 'child', key: 'family_rel_child', gender: 'male' },
     { value: 'partner', relation: 'partner', key: 'family_rel_partner' },
-    { value: 'parent', relation: 'parent', key: 'family_rel_parent' },
-    { value: 'sibling', relation: 'sibling', key: 'family_rel_sibling' },
-    { value: 'child', relation: 'child', key: 'family_rel_child' },
   ];
 
   const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -42,9 +42,42 @@
     })),
   );
 
-  let choice = $state('mother');
+  let choice = $state('parent');
   let pick = $state<FamilyPick>();
   let saving = $state(false);
+
+  // someone already related by blood or as a partner cannot become another close relative (a father is no brother);
+  // in-laws and step relatives can, e.g. a stepfather turns out to be the father
+  const closeRelations = new Set<Translations>([
+    'family_rel_parent',
+    'family_rel_grandparent',
+    'family_rel_child',
+    'family_rel_grandchild',
+    'family_rel_sibling',
+    'family_rel_half_sibling',
+    'family_rel_aunt',
+    'family_rel_niece',
+    'family_rel_cousin',
+    'family_rel_partner',
+  ]);
+  const exclude = $derived.by(() => {
+    const gender = choices.find(({ value }) => value === choice)?.gender;
+    const excluded = [memberId];
+    for (const member of graph.members.values()) {
+      const relation = graph.relation(member.id, memberId);
+      if ((relation && closeRelations.has(relation.key)) || (gender && member.gender && member.gender !== gender)) {
+        excluded.push(member.id);
+      }
+    }
+    return excluded;
+  });
+  const surname = $derived(nameOf(memberId).trim().split(/\s+/).at(-1) ?? '');
+
+  $effect(() => {
+    if (pick?.memberId && exclude.includes(pick.memberId)) {
+      pick = undefined;
+    }
+  });
 
   const onSubmit = async () => {
     const selected = choices.find(({ value }) => value === choice);
@@ -82,6 +115,12 @@
     <Field label={$t('family_relationship')}>
       <Select bind:value={choice} {options} />
     </Field>
-    <FamilyPersonPicker {graph} {nameOf} bind:value={pick} exclude={[memberId]} />
+    <FamilyPersonPicker
+      {graph}
+      {nameOf}
+      bind:value={pick}
+      {exclude}
+      surname={graph.members.get(memberId)?.name ? surname : ''}
+    />
   </Stack>
 </FormModal>

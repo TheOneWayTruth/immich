@@ -20,27 +20,67 @@
     exclude?: string[];
     /** only people with photos, e.g. to link a member to a person */
     peopleOnly?: boolean;
+    /** people with this last name are listed first, and suggested before anything is typed */
+    surname?: string;
   };
 
-  let { graph, nameOf, value = $bindable(), exclude = [], peopleOnly = false }: Props = $props();
+  let { graph, nameOf, value = $bindable(), exclude = [], peopleOnly = false, surname = '' }: Props = $props();
 
   let query = $state('');
   let people = $state<PersonResponseDto[]>([]);
+  let suggested = $state<PersonResponseDto[]>([]);
   let searching = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const peopleInTree = $derived(new Set([...graph.members.values()].map((member) => member.personId)));
+
+  const lastName = (name: string) => {
+    const words = name.trim().toLowerCase().split(/\s+/);
+    return words.length > 1 ? words.at(-1)! : '';
+  };
+  const treeSurnames = $derived(new Set([...graph.members.values()].map(({ name }) => lastName(name)).filter(Boolean)));
+  /** 2 for the wanted last name, 1 for any last name in the family tree */
+  const rank = (name: string) => {
+    const last = lastName(name);
+    if (!last) {
+      return 0;
+    }
+    return last === surname.toLowerCase() ? 2 : treeSurnames.has(last) ? 1 : 0;
+  };
+  const byRank = <T,>(items: T[], nameOfItem: (item: T) => string) =>
+    items
+      .map((item, index) => ({ item, index, rank: rank(nameOfItem(item)) }))
+      .sort((a, b) => b.rank - a.rank || a.index - b.index)
+      .map(({ item }) => item);
 
   const members = $derived.by(() => {
     if (peopleOnly) {
       return [];
     }
     const needle = query.trim().toLowerCase();
-    return [...graph.members.values()]
+    const matches = [...graph.members.values()]
       .filter((member) => !exclude.includes(member.id))
       .map((member) => ({ member, label: nameOf(member.id) }))
-      .filter(({ label }) => !needle || label.toLowerCase().includes(needle))
-      .slice(0, needle ? 20 : 8);
+      .filter(({ label }) => !needle || label.toLowerCase().includes(needle));
+    return byRank(matches, ({ member }) => member.name).slice(0, needle ? 20 : 8);
+  });
+
+  const shownPeople = $derived(
+    byRank(
+      (query.trim() ? people : suggested).filter((person) => !peopleInTree.has(person.id)),
+      (person) => person.name,
+    ).slice(0, 20),
+  );
+
+  $effect(() => {
+    const name = surname.trim();
+    if (name.length < 2) {
+      suggested = [];
+      return;
+    }
+    searchPerson({ name, withHidden: false })
+      .then((found) => (suggested = found.filter((person) => rank(person.name) === 2)))
+      .catch(() => (suggested = []));
   });
 
   const search = (name: string) => {
@@ -55,7 +95,7 @@
       searchPerson({ name: name.trim(), withHidden: false })
         .then((found) => {
           if (query === name) {
-            people = found.filter((person) => !peopleInTree.has(person.id)).slice(0, 20);
+            people = found;
           }
         })
         .catch(() => (people = []))
@@ -118,7 +158,7 @@
       {@render option({ memberId: member.id, label }, member.personId, $t('family_tree'))}
     {/each}
 
-    {#each people as person (person.id)}
+    {#each shownPeople as person (person.id)}
       {@render option({ personId: person.id, label: person.name || $t('family_unknown_person') }, person.id)}
     {/each}
 

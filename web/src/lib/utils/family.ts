@@ -115,6 +115,19 @@ export class FamilyGraph {
     return this.partners.get(id) ?? [];
   }
 
+  /** the other parents of this member's children, partners or not */
+  coParentsOf(id: string) {
+    const coParents = new Set<string>();
+    for (const childId of this.childrenOf(id)) {
+      for (const parentId of this.parentsOf(childId)) {
+        if (parentId !== id) {
+          coParents.add(parentId);
+        }
+      }
+    }
+    return [...coParents];
+  }
+
   siblingsOf(id: string) {
     const siblings = new Set<string>();
     for (const parentId of this.parentsOf(id)) {
@@ -365,7 +378,7 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
 
   const x = new Map<string, number>();
   const placeRow = (row: string[], target: (id: string) => number | undefined) => {
-    // partners stay next to each other: order whole couples, then lay them out left to right
+    // partners and parents of the same children stay next to each other: order whole couples, then lay them out left to right
     const units: string[][] = [];
     const seen = new Set<string>();
     for (const id of row) {
@@ -375,7 +388,7 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
       const unit = [id];
       seen.add(id);
       for (let index = 0; index < unit.length; index++) {
-        for (const partner of graph.partnersOf(unit[index])) {
+        for (const partner of [...graph.partnersOf(unit[index]), ...graph.coParentsOf(unit[index])]) {
           if (seen.has(partner) || !row.includes(partner)) {
             continue;
           }
@@ -466,23 +479,42 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
   let familyIndex = 0;
   for (const { parents, children } of families.values()) {
     const parentNodes = parents.map((id) => position.get(id)!);
+    const childNodes = children.map((id) => position.get(id)!);
     const bottom = Math.max(...parentNodes.map((node) => node.y)) + height / 2;
-    const startX = parentNodes.reduce((sum, node) => sum + node.x, 0) / parentNodes.length;
-    const startY = parentNodes.length === 2 && parentNodes[0].y === parentNodes[1].y ? parentNodes[0].y : bottom;
     const busY = bottom + gapY / 2 + ((familyIndex++ % 3) - 1) * 8;
-    lines.push({
-      kind: 'child',
-      points: [
-        [startX, startY],
-        [startX, busY],
-      ],
-    });
-    for (const childId of children) {
-      const child = position.get(childId)!;
+
+    // a couple side by side gets one line from between them; otherwise every parent gets their own
+    const [a, b] = parentNodes;
+    const couple =
+      parentNodes.length === 2 &&
+      graph.partnersOf(parents[0]).includes(parents[1]) &&
+      a.y === b.y &&
+      Math.abs(a.x - b.x) <= width + gapX;
+    const drops: Array<[number, number]> = couple
+      ? [[(a.x + b.x) / 2, a.y]]
+      : parentNodes.map((node): [number, number] => [node.x, node.y + height / 2]);
+    for (const [x, y] of drops) {
       lines.push({
         kind: 'child',
         points: [
-          [startX, busY],
+          [x, y],
+          [x, busY],
+        ],
+      });
+    }
+
+    const busXs = [...drops.map(([x]) => x), ...childNodes.map((node) => node.x)];
+    lines.push({
+      kind: 'child',
+      points: [
+        [Math.min(...busXs), busY],
+        [Math.max(...busXs), busY],
+      ],
+    });
+    for (const child of childNodes) {
+      lines.push({
+        kind: 'child',
+        points: [
           [child.x, busY],
           [child.x, child.y - height / 2],
         ],

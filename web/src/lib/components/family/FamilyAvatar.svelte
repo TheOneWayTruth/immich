@@ -15,14 +15,17 @@
 </script>
 
 {#if personId}
-  <ImageThumbnail
-    circle
-    shadow
-    url={getPeopleThumbnailUrl({ id: personId } as PersonResponseDto)}
-    altText={name}
-    widthStyle={size}
-    heightStyle={size}
-  />
+  <!-- ImageThumbnail keeps its first image, so a different person needs a new one -->
+  {#key personId}
+    <ImageThumbnail
+      circle
+      shadow
+      url={getPeopleThumbnailUrl({ id: personId } as PersonResponseDto)}
+      altText={name}
+      widthStyle={size}
+      heightStyle={size}
+    />
+  {/key}
 {:else}
   <div
     class="flex shrink-0 items-center justify-center rounded-full bg-gray-200 text-gray-500 dark:bg-gray-700 dark:text-gray-300"

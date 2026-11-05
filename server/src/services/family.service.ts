@@ -177,6 +177,11 @@ export class FamilyService {
       case FamilyRelation.Partner: {
         const [fromId, toId] = [memberId, otherId].sort();
         await this.familyRepository.addLink(ownerId, { type: FamilyLinkType.Partner, fromId, toId });
+        // children that only had one of the two as parent now have both
+        await this.familyRepository.completeParents(ownerId, [
+          ...tree.childrenOf(memberId),
+          ...tree.childrenOf(otherId),
+        ]);
         break;
       }
     }
@@ -202,12 +207,16 @@ export class FamilyService {
     const placeholder = parents.find((id) => tree.isPlaceholder(id));
     if (placeholder) {
       await this.familyRepository.mergeMember(ownerId, placeholder, parentId);
+      await this.familyRepository.linkCoParents(ownerId, tree.childrenOf(placeholder));
       return;
     }
     if (parents.length >= 2) {
       throw new BadRequestException('This person already has two parents');
     }
     await this.familyRepository.addLink(ownerId, { type: FamilyLinkType.Parent, fromId: parentId, toId: childId });
+    // the child of one partner is the child of both by default, and two parents are partners by default
+    await this.familyRepository.completeParents(ownerId, [childId]);
+    await this.familyRepository.linkCoParents(ownerId, [childId]);
   }
 
   private async addSibling(ownerId: string, tree: Tree, aId: string, bId: string) {
@@ -258,12 +267,23 @@ export class FamilyService {
               });
             }
           }
+          await this.familyRepository.linkCoParents(ownerId, siblings);
         }
         return;
       }
     }
 
-    throw new BadRequestException('They already have different parents. Add the shared parent instead.');
+    // one parent each: siblings share both
+    const parents = [...new Set([...parentsA, ...parentsB])];
+    if (parents.length > 2) {
+      throw new BadRequestException('They already have different parents. Add the shared parent instead.');
+    }
+    for (const childId of [aId, bId]) {
+      for (const parentId of parents) {
+        await this.familyRepository.addLink(ownerId, { type: FamilyLinkType.Parent, fromId: parentId, toId: childId });
+      }
+    }
+    await this.familyRepository.linkCoParents(ownerId, [aId, bId]);
   }
 
   /** finds or creates the member a reference points to */

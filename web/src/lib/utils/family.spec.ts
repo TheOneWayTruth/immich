@@ -1,4 +1,11 @@
-import { FamilyGraph, layoutFamily, type FamilyGender, type FamilyLink, type FamilyMember } from '$lib/utils/family';
+import {
+  FAMILY_CARD,
+  FamilyGraph,
+  layoutFamily,
+  type FamilyGender,
+  type FamilyLink,
+  type FamilyMember,
+} from '$lib/utils/family';
 
 const member = (id: string, gender: FamilyGender | null = null, name = id): FamilyMember => ({
   id,
@@ -143,5 +150,41 @@ describe('layoutFamily', () => {
         }
       }
     }
+  });
+});
+
+describe('layoutFamily lines', () => {
+  it('connects both parents to their children when they are not partners', () => {
+    const family = new FamilyGraph(
+      [member('galina', 'female'), member('irina', 'female'), member('sergej', 'male'), member('a'), member('b')],
+      [
+        parent('galina', 'irina'),
+        parent('irina', 'a'),
+        parent('sergej', 'a'),
+        parent('irina', 'b'),
+        parent('sergej', 'b'),
+      ],
+    );
+    const layout = layoutFamily(family);
+    const node = (id: string) => layout.nodes.find((item) => item.id === id)!;
+    const startsAt = (id: string) =>
+      layout.lines.some(({ points: [[x, y]] }) => x === node(id).x && y === node(id).y + FAMILY_CARD.height / 2);
+
+    expect(Math.abs(node('irina').x - node('sergej').x)).toBe(FAMILY_CARD.width + FAMILY_CARD.gapX);
+    expect(startsAt('irina')).toBe(true);
+    expect(startsAt('sergej')).toBe(true);
+  });
+
+  it('draws one line from between partners', () => {
+    const family = new FamilyGraph(
+      [member('mom', 'female'), member('dad', 'male'), member('kid')],
+      [partner('mom', 'dad'), parent('mom', 'kid'), parent('dad', 'kid')],
+    );
+    const layout = layoutFamily(family);
+    const mom = layout.nodes.find(({ id }) => id === 'mom')!;
+    const dad = layout.nodes.find(({ id }) => id === 'dad')!;
+    expect(
+      layout.lines.some(({ kind, points: [[x, y]] }) => kind === 'child' && x === (mom.x + dad.x) / 2 && y === mom.y),
+    ).toBe(true);
   });
 });

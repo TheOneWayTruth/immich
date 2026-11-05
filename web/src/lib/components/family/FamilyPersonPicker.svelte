@@ -53,24 +53,33 @@
       .sort((a, b) => b.rank - a.rank || a.index - b.index)
       .map(({ item }) => item);
 
-  const members = $derived.by(() => {
-    if (peopleOnly) {
-      return [];
-    }
-    const needle = query.trim().toLowerCase();
-    const matches = [...graph.members.values()]
-      .filter((member) => !exclude.includes(member.id))
-      .map((member) => ({ member, label: nameOf(member.id) }))
-      .filter(({ label }) => !needle || label.toLowerCase().includes(needle));
-    return byRank(matches, ({ member }) => member.name).slice(0, needle ? 20 : 8);
-  });
+  type Entry = { key: string; pick: FamilyPick; name: string; personId: string | null; description?: string };
 
-  const shownPeople = $derived(
-    byRank(
-      (query.trim() ? people : suggested).filter((person) => !peopleInTree.has(person.id)),
-      (person) => person.name,
-    ).slice(0, 20),
-  );
+  // family members and people with photos in one list, the wanted last name first, members before people
+  const entries = $derived.by(() => {
+    const needle = query.trim().toLowerCase();
+    const members: Entry[] = peopleOnly
+      ? []
+      : [...graph.members.values()]
+          .filter((member) => !exclude.includes(member.id))
+          .map((member) => ({
+            key: member.id,
+            pick: { memberId: member.id, label: nameOf(member.id) },
+            name: member.name,
+            personId: member.personId,
+            description: $t('family_tree'),
+          }))
+          .filter(({ pick }) => !needle || pick.label.toLowerCase().includes(needle));
+    const persons: Entry[] = (needle ? people : suggested)
+      .filter((person) => !peopleInTree.has(person.id))
+      .map((person) => ({
+        key: person.id,
+        pick: { personId: person.id, label: person.name || $t('family_unknown_person') },
+        name: person.name,
+        personId: person.id,
+      }));
+    return byRank([...members, ...persons], ({ name }) => name).slice(0, needle ? 40 : 12);
+  });
 
   $effect(() => {
     const name = surname.trim();
@@ -154,12 +163,8 @@
   />
 
   <div class="flex max-h-80 flex-col overflow-y-auto">
-    {#each members as { member, label } (member.id)}
-      {@render option({ memberId: member.id, label }, member.personId, $t('family_tree'))}
-    {/each}
-
-    {#each shownPeople as person (person.id)}
-      {@render option({ personId: person.id, label: person.name || $t('family_unknown_person') }, person.id)}
+    {#each entries as entry (entry.key)}
+      {@render option(entry.pick, entry.personId, entry.description)}
     {/each}
 
     {#if searching}

@@ -260,7 +260,7 @@ describe('layoutFamily spacing', () => {
     const order = (layout: ReturnType<typeof layoutFamily>, ids: string[]) =>
       layout.nodes
         .filter((node) => ids.includes(node.id))
-        .toSorted((a, b) => a.x - b.x)
+        .sort((a, b) => a.x - b.x)
         .map(({ id }) => id);
     const before = layoutFamily(new FamilyGraph(members, links));
     const after = layoutFamily(

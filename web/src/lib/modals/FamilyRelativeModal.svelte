@@ -28,7 +28,8 @@
     { value: 'brother', relation: 'sibling', key: 'family_rel_sibling', gender: 'male' },
     { value: 'daughter', relation: 'child', key: 'family_rel_child', gender: 'female' },
     { value: 'son', relation: 'child', key: 'family_rel_child', gender: 'male' },
-    { value: 'partner', relation: 'partner', key: 'family_rel_partner' },
+    { value: 'wife', relation: 'partner', key: 'family_rel_partner', gender: 'female' },
+    { value: 'husband', relation: 'partner', key: 'family_rel_partner', gender: 'male' },
   ];
 
   const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);

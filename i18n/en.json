@@ -1190,7 +1190,7 @@
   "family_rel_niece": "{greats, plural, =0 {} =1 {grand} other {#× great-grand}}{gender, select, female {niece} male {nephew} other {niece/nephew}}",
   "family_rel_parent": "{gender, select, female {mother} male {father} other {parent}}",
   "family_rel_parent_in_law": "{gender, select, female {mother-in-law} male {father-in-law} other {parent-in-law}}",
-  "family_rel_partner": "partner",
+  "family_rel_partner": "{gender, select, female {wife} male {husband} other {spouse}}",
   "family_rel_sibling": "{gender, select, female {sister} male {brother} other {sibling}}",
   "family_rel_sibling_in_law": "{gender, select, female {sister-in-law} male {brother-in-law} other {sibling-in-law}}",
   "family_rel_step_child": "{gender, select, female {stepdaughter} male {stepson} other {stepchild}}",

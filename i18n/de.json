@@ -1183,7 +1183,7 @@
   "family_rel_niece": "{greats, plural, =0 {{gender, select, female {Nichte} male {Neffe} other {Nichte/Neffe}}} other {{gender, select, female {Großnichte} male {Großneffe} other {Großnichte/-neffe}}}}",
   "family_rel_parent": "{gender, select, female {Mutter} male {Vater} other {Elternteil}}",
   "family_rel_parent_in_law": "{gender, select, female {Schwiegermutter} male {Schwiegervater} other {Schwiegerelternteil}}",
-  "family_rel_partner": "{gender, select, female {Partnerin} male {Partner} other {Partner}}",
+  "family_rel_partner": "{gender, select, female {Ehefrau} male {Ehemann} other {Ehepartner}}",
   "family_rel_sibling": "{gender, select, female {Schwester} male {Bruder} other {Geschwister}}",
   "family_rel_sibling_in_law": "{gender, select, female {Schwägerin} male {Schwager} other {Schwager/Schwägerin}}",
   "family_rel_step_child": "{gender, select, female {Stieftochter} male {Stiefsohn} other {Stiefkind}}",

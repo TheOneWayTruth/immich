@@ -141,10 +141,13 @@
   });
 
   const addFirstPerson = async () => {
-    const pick = await modalManager.show(FamilyPickModal, { title: $t('family_add_person'), graph, nameOf });
-    if (pick?.memberId) {
-      await select(pick.memberId);
-    } else if (pick) {
+    const pick = await modalManager.show(FamilyPickModal, {
+      title: $t('family_add_person'),
+      graph,
+      nameOf,
+      withMembers: false,
+    });
+    if (pick) {
       await run(() => familyApi.addMember({ personId: pick.personId, name: pick.name, gender: pick.gender }));
     }
   };

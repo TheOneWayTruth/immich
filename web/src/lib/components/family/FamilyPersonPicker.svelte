@@ -6,7 +6,7 @@
 <script lang="ts">
   import FamilyAvatar from '$lib/components/family/FamilyAvatar.svelte';
   import type { FamilyGraph } from '$lib/utils/family';
-  import { searchPerson, type PersonResponseDto } from '@immich/sdk';
+  import { getAllPeople, searchPerson, type PersonResponseDto } from '@immich/sdk';
   import { Icon, Input, LoadingSpinner, Text } from '@immich/ui';
   import { mdiAccountPlusOutline, mdiAccountQuestionOutline, mdiCheck } from '@mdi/js';
   import { t } from 'svelte-i18n';
@@ -20,11 +20,21 @@
     exclude?: string[];
     /** only people with photos, e.g. to link a member to a person */
     peopleOnly?: boolean;
+    /** false when only someone not yet in the tree may be picked */
+    withMembers?: boolean;
     /** people with this last name are listed first, and suggested before anything is typed */
     surname?: string;
   };
 
-  let { graph, nameOf, value = $bindable(), exclude = [], peopleOnly = false, surname = '' }: Props = $props();
+  let {
+    graph,
+    nameOf,
+    value = $bindable(),
+    exclude = [],
+    peopleOnly = false,
+    withMembers = true,
+    surname = '',
+  }: Props = $props();
 
   let query = $state('');
   let people = $state<PersonResponseDto[]>([]);
@@ -58,18 +68,19 @@
   // family members and people with photos in one list, the wanted last name first, members before people
   const entries = $derived.by(() => {
     const needle = query.trim().toLowerCase();
-    const members: Entry[] = peopleOnly
-      ? []
-      : [...graph.members.values()]
-          .filter((member) => !exclude.includes(member.id))
-          .map((member) => ({
-            key: member.id,
-            pick: { memberId: member.id, label: nameOf(member.id) },
-            name: member.name,
-            personId: member.personId,
-            description: $t('family_tree'),
-          }))
-          .filter(({ pick }) => !needle || pick.label.toLowerCase().includes(needle));
+    const members: Entry[] =
+      peopleOnly || !withMembers
+        ? []
+        : [...graph.members.values()]
+            .filter((member) => !exclude.includes(member.id))
+            .map((member) => ({
+              key: member.id,
+              pick: { memberId: member.id, label: nameOf(member.id) },
+              name: member.name,
+              personId: member.personId,
+              description: $t('family_tree'),
+            }))
+            .filter(({ pick }) => !needle || pick.label.toLowerCase().includes(needle));
     const persons: Entry[] = (needle ? people : suggested)
       .filter((person) => !peopleInTree.has(person.id))
       .map((person) => ({
@@ -81,15 +92,14 @@
     return byRank([...members, ...persons], ({ name }) => name).slice(0, needle ? 40 : 12);
   });
 
+  // before anything is typed: people with the wanted last name, or else the people with the most photos
   $effect(() => {
     const name = surname.trim();
-    if (name.length < 2) {
-      suggested = [];
-      return;
-    }
-    searchPerson({ name, withHidden: false })
-      .then((found) => (suggested = found.filter((person) => rank(person.name) === 2)))
-      .catch(() => (suggested = []));
+    const request =
+      name.length >= 2
+        ? searchPerson({ name, withHidden: false }).then((found) => found.filter((person) => rank(person.name) === 2))
+        : getAllPeople({ withHidden: false, size: 60 }).then(({ people }) => people.filter((person) => person.name));
+    request.then((found) => (suggested = found)).catch(() => (suggested = []));
   });
 
   const search = (name: string) => {
@@ -178,7 +188,10 @@
           null,
         )}
       {/if}
-      {@render option({ label: $t('family_unknown_person') }, null, $t('family_unknown_person_description'))}
+      {#if withMembers}
+        <!-- an unknown person only makes sense as someone's relative -->
+        {@render option({ label: $t('family_unknown_person') }, null, $t('family_unknown_person_description'))}
+      {/if}
     {/if}
   </div>
 </div>

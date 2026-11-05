@@ -10,10 +10,11 @@
     graph: FamilyGraph;
     nameOf: (id: string) => string;
     peopleOnly?: boolean;
+    withMembers?: boolean;
     onClose: (pick?: FamilyPick & { gender?: FamilyGender }) => void;
   };
 
-  const { title, graph, nameOf, peopleOnly = false, onClose }: Props = $props();
+  const { title, graph, nameOf, peopleOnly = false, withMembers = true, onClose }: Props = $props();
 
   let pick = $state<FamilyPick>();
   let gender = $state<FamilyGender>();
@@ -36,7 +37,7 @@
   disabled={!pick || (needsGender && !gender)}
 >
   <Stack gap={4}>
-    <FamilyPersonPicker {graph} {nameOf} {peopleOnly} bind:value={pick} />
+    <FamilyPersonPicker {graph} {nameOf} {peopleOnly} {withMembers} bind:value={pick} />
     {#if needsGender}
       <Field label={$t('family_gender')}>
         <HStack gap={2}>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import FamilyAvatar from '$lib/components/family/FamilyAvatar.svelte';
+  import FamilyPanZoom from '$lib/components/family/FamilyPanZoom.svelte';
   import UserPageLayout from '$lib/components/layouts/UserPageLayout.svelte';
   import FamilyPickModal from '$lib/modals/FamilyPickModal.svelte';
   import FamilyRelativeModal from '$lib/modals/FamilyRelativeModal.svelte';
@@ -42,7 +43,7 @@
   let missingPerson = $state<{ id: string; name: string }>();
   let busy = $state(false);
   let nameDraft = $state('');
-  let canvas = $state<HTMLElement>();
+  let panZoom = $state<FamilyPanZoom>();
 
   const graph = $derived(new FamilyGraph(tree?.members ?? [], tree?.links ?? []));
   const layout = $derived(layoutFamily(graph));
@@ -81,16 +82,15 @@
     { value: 'male' as const, label: $t('family_gender_male') },
   ]);
 
-  const select = async (id: string | undefined) => {
+  /** center moves the selected member into view, e.g. when picked from the list instead of the map */
+  const select = async (id: string | undefined, { center = true } = {}) => {
     selectedId = id;
     nameDraft = id ? (graph.members.get(id)?.name ?? '') : '';
     await tick();
-    if (!id) {
-      return;
+    const node = id ? layout.nodes.find((item) => item.id === id) : undefined;
+    if (center && node) {
+      panZoom?.centerOn(node.x, node.y, 0.7);
     }
-    canvas
-      ?.querySelector(`[data-member-id="${CSS.escape(id)}"]`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
   };
 
   const run = async (action: () => Promise<FamilyTreeResponse | undefined>) => {
@@ -122,6 +122,9 @@
       handleError(error, $t('errors.something_went_wrong'));
       return;
     }
+    // show the whole tree first, then move to the selected member
+    await tick();
+    panZoom?.fit();
     if (data.personId) {
       const member = tree.members.find(({ personId }) => personId === data.personId);
       if (member) {
@@ -238,22 +241,7 @@
   {/snippet}
 
   <div class="flex h-full flex-col lg:flex-row">
-    <div class="relative min-h-0 grow overflow-auto" bind:this={canvas}>
-      {#if missingPerson}
-        <div
-          class="sticky inset-s-0 top-0 z-10 m-4 flex flex-wrap items-center gap-3 rounded-2xl bg-gray-100 p-4 dark:bg-gray-800"
-        >
-          <FamilyAvatar personId={missingPerson.id} name={missingPerson.name} size="2.5rem" />
-          <Text class="grow">{$t('family_not_in_tree', { values: { name: missingPerson.name } })}</Text>
-          <Button size="small" leadingIcon={mdiAccountPlusOutline} onclick={() => addMissingPerson('female')}>
-            {$t('family_add_as', { values: { gender: 'female' } })}
-          </Button>
-          <Button size="small" leadingIcon={mdiAccountPlusOutline} onclick={() => addMissingPerson('male')}>
-            {$t('family_add_as', { values: { gender: 'male' } })}
-          </Button>
-        </div>
-      {/if}
-
+    <div class="relative min-h-[60vh] min-w-0 grow lg:min-h-0">
       {#if !tree}
         <div class="flex justify-center p-12"><LoadingSpinner size="giant" /></div>
       {:else if tree.members.length === 0}
@@ -262,10 +250,7 @@
           <Button leadingIcon={mdiAccountPlusOutline} onclick={addFirstPerson}>{$t('family_add_first_person')}</Button>
         </div>
       {:else}
-        {#if focusId}
-          <Text size="small" color="muted" class="px-8 pt-4">{$t('family_focus_hint')}</Text>
-        {/if}
-        <div class="p-8">
+        <FamilyPanZoom bind:this={panZoom} width={layout.width} height={layout.height}>
           <div class="relative" style:width="{layout.width}px" style:height="{layout.height}px">
             <svg
               class="absolute inset-0 overflow-visible"
@@ -297,7 +282,7 @@
                 style:top="{node.y - FAMILY_CARD.height / 2}px"
                 style:width="{FAMILY_CARD.width}px"
                 style:height="{FAMILY_CARD.height}px"
-                onclick={() => select(node.id)}
+                onclick={() => select(node.id, { center: false })}
               >
                 <FamilyAvatar personId={member.personId} name={member.name} size="4.5rem" />
                 <span class="line-clamp-2 text-sm/tight font-medium {member.name ? '' : 'text-gray-500 italic'}">
@@ -311,6 +296,29 @@
               </button>
             {/each}
           </div>
+
+          {#snippet overlay()}
+            {#if focusId}
+              <Text size="small" color="muted" class="pointer-events-none absolute inset-s-4 top-3">
+                {$t('family_focus_hint')}
+              </Text>
+            {/if}
+          {/snippet}
+        </FamilyPanZoom>
+      {/if}
+
+      {#if missingPerson}
+        <div
+          class="absolute inset-x-0 top-0 z-10 m-4 flex flex-wrap items-center gap-3 rounded-2xl bg-gray-100 p-4 dark:bg-gray-800"
+        >
+          <FamilyAvatar personId={missingPerson.id} name={missingPerson.name} size="2.5rem" />
+          <Text class="grow">{$t('family_not_in_tree', { values: { name: missingPerson.name } })}</Text>
+          <Button size="small" leadingIcon={mdiAccountPlusOutline} onclick={() => addMissingPerson('female')}>
+            {$t('family_add_as', { values: { gender: 'female' } })}
+          </Button>
+          <Button size="small" leadingIcon={mdiAccountPlusOutline} onclick={() => addMissingPerson('male')}>
+            {$t('family_add_as', { values: { gender: 'male' } })}
+          </Button>
         </div>
       {/if}
     </div>

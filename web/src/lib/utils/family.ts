@@ -269,27 +269,27 @@ export class FamilyGraph {
       }
     }
 
-    return this.isConnected(a, b) ? { key: 'family_rel_related', values: { gender } } : undefined;
-  }
-
-  private isConnected(a: string, b: string) {
-    const seen = new Set([a]);
-    const queue = [a];
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      for (const next of [...this.parentsOf(current), ...this.childrenOf(current), ...this.partnersOf(current)]) {
-        if (next === b) {
-          return true;
+    // children of two partners that do not share a parent
+    for (const parentA of this.parentsOf(a)) {
+      for (const parentB of this.parentsOf(b)) {
+        if (this.partnersOf(parentA).includes(parentB)) {
+          return { key: 'family_rel_step_sibling', values: { gender } };
         }
-        if (seen.has(next)) {
-          continue;
-        }
-
-        seen.add(next);
-        queue.push(next);
       }
     }
-    return false;
+
+    // partners of two siblings
+    for (const partnerA of this.partnersOf(a)) {
+      for (const partnerB of this.partnersOf(b)) {
+        const viaPartners = this.blood(partnerA, partnerB);
+        if (viaPartners?.up === 1 && viaPartners.down === 1) {
+          return { key: 'family_rel_co_sibling_in_law', values: { gender } };
+        }
+      }
+    }
+
+    // further relationships have no word of their own, so they get no label
+    return undefined;
   }
 
   /** the closest named relative of a nameless member and how they are related, e.g. "father of" Lisa */

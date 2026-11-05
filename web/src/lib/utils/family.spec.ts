@@ -80,7 +80,7 @@ describe('FamilyGraph.relation', () => {
     ['tom', 'anna', 'family_rel_sibling_in_law', { gender: 'male' }],
     ['max', 'grandpa', 'family_rel_child_in_law', { gender: 'male' }],
     ['tom', 'lisa', 'family_rel_aunt', { gender: 'male', greats: 0 }],
-    ['tom', 'max', 'family_rel_related', { gender: 'male' }],
+    ['tom', 'max', 'family_rel_co_sibling_in_law', { gender: 'male' }],
   ];
 
   for (const [a, b, key, values] of tests) {
@@ -92,6 +92,23 @@ describe('FamilyGraph.relation', () => {
   it('is undefined for people that are not connected', () => {
     expect(graph.relation('stranger', 'lisa')).toBeUndefined();
     expect(graph.relation('lisa', 'lisa')).toBeUndefined();
+  });
+
+  it('knows step siblings', () => {
+    const step = new FamilyGraph(
+      [member('mom', 'female'), member('dad', 'male'), member('a'), member('b', 'male')],
+      [partner('mom', 'dad'), parent('mom', 'a'), parent('dad', 'b')],
+    );
+    expect(step.relation('b', 'a')).toEqual({ key: 'family_rel_step_sibling', values: { gender: 'male' } });
+  });
+
+  it('has no label for relatives without a word of their own', () => {
+    const withPartner = new FamilyGraph(
+      [...graph.members.values(), member('x', 'male')],
+      [...graph.links, partner('lisa', 'x')],
+    );
+    // the partner of a cousin
+    expect(withPartner.relation('x', 'ben')).toBeUndefined();
   });
 
   it('knows half siblings', () => {

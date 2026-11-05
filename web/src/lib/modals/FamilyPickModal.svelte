@@ -1,7 +1,7 @@
 <script lang="ts">
   import FamilyPersonPicker, { type FamilyPick } from '$lib/components/family/FamilyPersonPicker.svelte';
-  import type { FamilyGraph } from '$lib/utils/family';
-  import { FormModal } from '@immich/ui';
+  import type { FamilyGender, FamilyGraph } from '$lib/utils/family';
+  import { Button, Field, FormModal, HStack, Stack } from '@immich/ui';
   import { mdiAccountPlusOutline } from '@mdi/js';
   import { t } from 'svelte-i18n';
 
@@ -10,12 +10,20 @@
     graph: FamilyGraph;
     nameOf: (id: string) => string;
     peopleOnly?: boolean;
-    onClose: (pick?: FamilyPick) => void;
+    onClose: (pick?: FamilyPick & { gender?: FamilyGender }) => void;
   };
 
   const { title, graph, nameOf, peopleOnly = false, onClose }: Props = $props();
 
   let pick = $state<FamilyPick>();
+  let gender = $state<FamilyGender>();
+
+  // someone already in the tree keeps their gender; everyone new is a woman or a man
+  const needsGender = $derived(!peopleOnly && !pick?.memberId);
+  const genders = $derived([
+    { value: 'female' as const, label: $t('family_gender_female') },
+    { value: 'male' as const, label: $t('family_gender_male') },
+  ]);
 </script>
 
 <FormModal
@@ -23,9 +31,27 @@
   size="medium"
   icon={mdiAccountPlusOutline}
   onClose={() => onClose()}
-  onSubmit={() => onClose(pick)}
+  onSubmit={() => onClose(pick && { ...pick, gender: needsGender ? gender : undefined })}
   submitText={$t('add')}
-  disabled={!pick}
+  disabled={!pick || (needsGender && !gender)}
 >
-  <FamilyPersonPicker {graph} {nameOf} {peopleOnly} bind:value={pick} />
+  <Stack gap={4}>
+    <FamilyPersonPicker {graph} {nameOf} {peopleOnly} bind:value={pick} />
+    {#if needsGender}
+      <Field label={$t('family_gender')}>
+        <HStack gap={2}>
+          {#each genders as option (option.value)}
+            <Button
+              size="small"
+              variant={gender === option.value ? 'filled' : 'outline'}
+              color={gender === option.value ? 'primary' : 'secondary'}
+              onclick={() => (gender = option.value)}
+            >
+              {option.label}
+            </Button>
+          {/each}
+        </HStack>
+      </Field>
+    {/if}
+  </Stack>
 </FormModal>

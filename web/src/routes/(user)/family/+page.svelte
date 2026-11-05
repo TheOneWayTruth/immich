@@ -17,7 +17,7 @@
   } from '$lib/utils/family';
   import { handleError } from '$lib/utils/handle-error';
   import { getPerson } from '@immich/sdk';
-  import { Button, Field, IconButton, Input, LoadingSpinner, Select, Switch, Text, modalManager } from '@immich/ui';
+  import { Button, Field, IconButton, Input, LoadingSpinner, Switch, Text, modalManager } from '@immich/ui';
   import {
     mdiAccountMultiplePlusOutline,
     mdiAccountPlusOutline,
@@ -77,9 +77,8 @@
   };
 
   const genderOptions = $derived([
-    { value: '', label: $t('family_gender_unknown') },
-    { value: 'female', label: $t('family_gender_female') },
-    { value: 'male', label: $t('family_gender_male') },
+    { value: 'female' as const, label: $t('family_gender_female') },
+    { value: 'male' as const, label: $t('family_gender_male') },
   ]);
 
   const select = async (id: string | undefined) => {
@@ -140,16 +139,18 @@
 
   const addFirstPerson = async () => {
     const pick = await modalManager.show(FamilyPickModal, { title: $t('family_add_person'), graph, nameOf });
-    if (pick) {
-      await run(() => familyApi.addMember({ personId: pick.personId, name: pick.name }));
+    if (pick?.memberId) {
+      await select(pick.memberId);
+    } else if (pick) {
+      await run(() => familyApi.addMember({ personId: pick.personId, name: pick.name, gender: pick.gender }));
     }
   };
 
-  const addMissingPerson = async () => {
+  const addMissingPerson = async (gender: FamilyGender) => {
     if (missingPerson) {
       const { id } = missingPerson;
       missingPerson = undefined;
-      await run(() => familyApi.addMember({ personId: id }));
+      await run(() => familyApi.addMember({ personId: id, gender }));
     }
   };
 
@@ -244,8 +245,11 @@
         >
           <FamilyAvatar personId={missingPerson.id} name={missingPerson.name} size="2.5rem" />
           <Text class="grow">{$t('family_not_in_tree', { values: { name: missingPerson.name } })}</Text>
-          <Button size="small" leadingIcon={mdiAccountPlusOutline} onclick={addMissingPerson}>
-            {$t('family_add_person')}
+          <Button size="small" leadingIcon={mdiAccountPlusOutline} onclick={() => addMissingPerson('female')}>
+            {$t('family_add_as', { values: { gender: 'female' } })}
+          </Button>
+          <Button size="small" leadingIcon={mdiAccountPlusOutline} onclick={() => addMissingPerson('male')}>
+            {$t('family_add_as', { values: { gender: 'male' } })}
           </Button>
         </div>
       {/if}
@@ -348,12 +352,18 @@
         {/if}
 
         <Field label={$t('family_gender')}>
-          <Select
-            value={selected.gender ?? ''}
-            options={genderOptions}
-            onChange={(value: string) =>
-              run(() => familyApi.updateMember(id, { gender: (value || null) as FamilyGender | null }))}
-          />
+          <div class="flex gap-2">
+            {#each genderOptions as option (option.value)}
+              <Button
+                size="small"
+                variant={selected.gender === option.value ? 'filled' : 'outline'}
+                color={selected.gender === option.value ? 'primary' : 'secondary'}
+                onclick={() => run(() => familyApi.updateMember(id, { gender: option.value }))}
+              >
+                {option.label}
+              </Button>
+            {/each}
+          </div>
         </Field>
 
         <label class="flex items-center justify-between gap-2">

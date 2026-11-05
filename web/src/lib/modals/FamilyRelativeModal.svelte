@@ -22,13 +22,10 @@
   const { graph, memberId, nameOf, onClose }: Props = $props();
 
   const choices: Array<{ value: string; relation: FamilyRelation; key: Translations; gender?: FamilyGender }> = [
-    { value: 'parent', relation: 'parent', key: 'family_rel_parent' },
     { value: 'mother', relation: 'parent', key: 'family_rel_parent', gender: 'female' },
     { value: 'father', relation: 'parent', key: 'family_rel_parent', gender: 'male' },
-    { value: 'sibling', relation: 'sibling', key: 'family_rel_sibling' },
     { value: 'sister', relation: 'sibling', key: 'family_rel_sibling', gender: 'female' },
     { value: 'brother', relation: 'sibling', key: 'family_rel_sibling', gender: 'male' },
-    { value: 'child', relation: 'child', key: 'family_rel_child' },
     { value: 'daughter', relation: 'child', key: 'family_rel_child', gender: 'female' },
     { value: 'son', relation: 'child', key: 'family_rel_child', gender: 'male' },
     { value: 'partner', relation: 'partner', key: 'family_rel_partner' },
@@ -42,7 +39,7 @@
     })),
   );
 
-  let choice = $state('parent');
+  let choice = $state('mother');
   let pick = $state<FamilyPick>();
   let saving = $state(false);
 

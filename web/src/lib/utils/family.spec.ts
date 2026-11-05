@@ -205,3 +205,68 @@ describe('layoutFamily lines', () => {
     ).toBe(true);
   });
 });
+
+describe('layoutFamily spacing', () => {
+  // two couples, each with two children, side by side in the same rows
+  const members = ['a1', 'a2', 'ak1', 'ak2', 'b1', 'b2', 'bk1', 'bk2'].map((id) => member(id));
+  const links = [
+    partner('a1', 'a2'),
+    parent('a1', 'ak1'),
+    parent('a2', 'ak1'),
+    parent('a1', 'ak2'),
+    parent('a2', 'ak2'),
+    partner('b1', 'b2'),
+    parent('b1', 'bk1'),
+    parent('b2', 'bk1'),
+    parent('b1', 'bk2'),
+    parent('b2', 'bk2'),
+  ];
+
+  it('keeps siblings close and leaves room between families', () => {
+    const layout = layoutFamily(new FamilyGraph(members, links));
+    const x = (id: string) => layout.nodes.find((node) => node.id === id)!.x;
+    const { width, gapX, familyGap } = FAMILY_CARD;
+
+    expect(Math.abs(x('ak1') - x('ak2'))).toBe(width + gapX);
+    const [left, right] = x('ak1') < x('bk1') ? ['ak', 'bk'] : ['bk', 'ak'];
+    const between = Math.min(x(`${right}1`), x(`${right}2`)) - Math.max(x(`${left}1`), x(`${left}2`));
+    expect(between).toBeGreaterThanOrEqual(width + familyGap);
+  });
+
+  it('draws overlapping lines of different families at different heights', () => {
+    // dad has children with two partners, so both families' lines run below him
+    const layout = layoutFamily(
+      new FamilyGraph(
+        ['first', 'dad', 'second', 'k1', 'k2'].map((id) => member(id)),
+        [
+          partner('first', 'dad'),
+          partner('dad', 'second'),
+          parent('first', 'k1'),
+          parent('dad', 'k1'),
+          parent('dad', 'k2'),
+          parent('second', 'k2'),
+        ],
+      ),
+    );
+    const busHeights = new Set(
+      layout.lines
+        .filter(({ kind, points }) => kind === 'child' && points.length === 2 && points[0][1] === points[1][1])
+        .map(({ points }) => points[0][1]),
+    );
+    expect(busHeights.size).toBe(2);
+  });
+
+  it('keeps the order of a row when someone is added elsewhere', () => {
+    const order = (layout: ReturnType<typeof layoutFamily>, ids: string[]) =>
+      layout.nodes
+        .filter((node) => ids.includes(node.id))
+        .toSorted((a, b) => a.x - b.x)
+        .map(({ id }) => id);
+    const before = layoutFamily(new FamilyGraph(members, links));
+    const after = layoutFamily(
+      new FamilyGraph([...members, member('bk3')], [...links, parent('b1', 'bk3'), parent('b2', 'bk3')]),
+    );
+    const children = ['ak1', 'ak2', 'bk1', 'bk2'];
+    expect(order(after, children)).toEqual(order(before, children));
+  });
+});

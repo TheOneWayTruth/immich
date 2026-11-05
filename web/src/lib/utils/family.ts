@@ -315,14 +315,15 @@ export type FamilyLayoutNode = { id: string; x: number; y: number };
 export type FamilyLayoutLine = { points: Array<[number, number]>; kind: 'child' | 'partner' };
 export type FamilyLayout = { nodes: FamilyLayoutNode[]; lines: FamilyLayoutLine[]; width: number; height: number };
 
-export const FAMILY_CARD = { width: 132, height: 156, gapX: 28, gapY: 72 };
+/** gapX is between members of one family, familyGap between different families */
+export const FAMILY_CARD = { width: 132, height: 156, gapX: 28, gapY: 84, familyGap: 112 };
 
 /**
  * Places members in rows by generation (parents above children, partners side by side) and draws
  * one line from every set of parents down to their children. Coordinates are card centers.
  */
 export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
-  const { width, height, gapX, gapY } = FAMILY_CARD;
+  const { width, height, gapX, gapY, familyGap } = FAMILY_CARD;
   const generation = new Map<string, number>();
 
   // generations per connected group, starting from its oldest-known member
@@ -371,10 +372,20 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
   }
 
   const minGen = Math.min(...generation.values());
+  // rows start in the order members were added, so adding someone moves as little as possible
   const rows: string[][] = [];
-  for (const [id, gen] of generation) {
-    (rows[gen - minGen] ??= []).push(id);
+  for (const id of graph.members.keys()) {
+    (rows[generation.get(id)! - minGen] ??= []).push(id);
   }
+  for (let index = 0; index < rows.length; index++) {
+    rows[index] ??= [];
+  }
+
+  /** members with the same parents (or the same partner's parents) belong to one family */
+  const familyOf = (unit: string[]) => {
+    const withParents = unit.find((id) => graph.parentsOf(id).length > 0);
+    return withParents ? [...graph.parentsOf(withParents)].sort().join(',') : `own:${unit[0]}`;
+  };
 
   const x = new Map<string, number>();
   const placeRow = (row: string[], target: (id: string) => number | undefined) => {
@@ -410,14 +421,21 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
 
     row.length = 0;
     let cursor = -Infinity;
+    let previousFamily: string | undefined;
     for (const { unit, center } of wanted) {
       const unitSize = unitWidth(unit);
-      let left = center === undefined ? cursor : center - unitSize / 2;
-      if (left < cursor || !Number.isFinite(left)) {
-        left = Number.isFinite(cursor) ? cursor : 0;
+      const family = familyOf(unit);
+      // siblings stay close together, different families get room between them
+      const minimumLeft = Number.isFinite(cursor) ? cursor + (family === previousFamily ? gapX : familyGap) : -Infinity;
+      let left = center === undefined ? minimumLeft : center - unitSize / 2;
+      if (left < minimumLeft || !Number.isFinite(left)) {
+        left = Number.isFinite(minimumLeft) ? minimumLeft : 0;
       }
-      for (const [index, id] of unit.entries()) x.set(id, left + width / 2 + index * (width + gapX));
-      cursor = left + unitSize + gapX * 1.5;
+      for (const [index, id] of unit.entries()) {
+        x.set(id, left + width / 2 + index * (width + gapX));
+      }
+      cursor = left + unitSize;
+      previousFamily = family;
       row.push(...unit);
     }
   };
@@ -476,12 +494,27 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
     family.children.push(id);
     families.set(key, family);
   }
-  let familyIndex = 0;
-  for (const { parents, children } of families.values()) {
-    const parentNodes = parents.map((id) => position.get(id)!);
-    const childNodes = children.map((id) => position.get(id)!);
+  // families whose lines would overlap get their horizontal line at different heights
+  const LEVELS = [0, -16, 16, -32, 32];
+  const levelEnds = new Map<number, number[]>();
+  const familyLines = [...families.values()]
+    .map(({ parents, children }) => {
+      const parentNodes = parents.map((id) => position.get(id)!);
+      const childNodes = children.map((id) => position.get(id)!);
+      const xs = [...parentNodes, ...childNodes].map((node) => node.x);
+      return { parents, parentNodes, childNodes, minX: Math.min(...xs), maxX: Math.max(...xs) };
+    })
+    .sort((a, b) => a.minX - b.minX);
+  for (const { parents, parentNodes, childNodes, minX, maxX } of familyLines) {
     const bottom = Math.max(...parentNodes.map((node) => node.y)) + height / 2;
-    const busY = bottom + gapY / 2 + ((familyIndex++ % 3) - 1) * 8;
+    const ends = levelEnds.get(bottom) ?? LEVELS.map(() => -Infinity);
+    levelEnds.set(bottom, ends);
+    let level = ends.findIndex((end) => end + gapX / 2 < minX);
+    if (level === -1) {
+      level = ends.indexOf(Math.min(...ends));
+    }
+    ends[level] = maxX;
+    const busY = bottom + gapY / 2 + LEVELS[level];
 
     // a couple side by side gets one line from between them; otherwise every parent gets their own
     const [a, b] = parentNodes;

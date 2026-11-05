@@ -98,12 +98,25 @@
       return;
     }
     busy = true;
+    // the member being worked on stays where it is on screen, however the rest of the tree moves
+    const anchorId = selectedId;
+    const before = anchorId ? layout.nodes.find((node) => node.id === anchorId) : undefined;
+    const screen = before && panZoom?.toScreen(before.x, before.y);
     try {
       const result = await action();
       if (result) {
         tree = result;
+        await tick();
+        const after = anchorId ? layout.nodes.find((node) => node.id === anchorId) : undefined;
+        if (after && screen) {
+          panZoom?.keepAt(after.x, after.y, screen);
+        }
         if (result.memberId) {
-          await select(result.memberId);
+          await select(result.memberId, { center: false });
+          const added = layout.nodes.find((node) => node.id === result.memberId);
+          if (added) {
+            panZoom?.ensureVisible(added.x, added.y, FAMILY_CARD.width, FAMILY_CARD.height);
+          }
         } else if (selectedId && !graph.members.has(selectedId)) {
           await select(undefined);
         }

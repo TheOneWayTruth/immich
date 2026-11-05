@@ -78,6 +78,35 @@
     y = viewHeight / 2 - (contentY + PADDING) * scale;
   };
 
+  /** where a content point is on screen, relative to the viewport */
+  export const toScreen = (contentX: number, contentY: number): Point => ({
+    x: x + (contentX + PADDING) * scale,
+    y: y + (contentY + PADDING) * scale,
+  });
+
+  /** moves the content without animation so that a content point is at the given screen point */
+  export const keepAt = (contentX: number, contentY: number, screen: Point) => {
+    animate = false;
+    x = screen.x - (contentX + PADDING) * scale;
+    y = screen.y - (contentY + PADDING) * scale;
+  };
+
+  /** moves the content as little as needed to show a box around a content point */
+  export const ensureVisible = (contentX: number, contentY: number, boxWidth: number, boxHeight: number) => {
+    const { width: viewWidth, height: viewHeight } = size();
+    const margin = 24;
+    const center = toScreen(contentX, contentY);
+    const halfWidth = (boxWidth / 2) * scale + margin;
+    const halfHeight = (boxHeight / 2) * scale + margin;
+    const dx = Math.max(0, halfWidth - center.x) - Math.max(0, center.x + halfWidth - viewWidth);
+    const dy = Math.max(0, halfHeight - center.y) - Math.max(0, center.y + halfHeight - viewHeight);
+    if (dx || dy) {
+      animate = true;
+      x += dx;
+      y += dy;
+    }
+  };
+
   const onpointerdown = (event: PointerEvent) => {
     if (event.pointerType === 'mouse' && event.button !== 0) {
       return;

@@ -185,12 +185,7 @@ describe('FamilyGraph.relation', () => {
     const layout = layoutFamily(wick);
     const node = (id: string) => layout.nodes.find((item) => item.id === id)!;
     expect(node('eugen').y).toBeLessThan(node('nikol').y);
-    // nikol hangs from the line of lena and eugen, with a dashed end; alexej likewise from sergej and irina
-    const steps = layout.lines.filter(({ kind }) => kind === 'step');
-    expect(steps).toHaveLength(2);
-    for (const id of ['nikol', 'alexej']) {
-      expect(steps.some(({ points }) => points.length === 2 && points[1][0] === node(id).x)).toBe(true);
-    }
+    expect(layout.lines.filter(({ kind }) => kind === 'step')).toHaveLength(2);
   });
 
   it('uses "other" when the gender is not known', () => {

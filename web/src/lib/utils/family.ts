@@ -443,24 +443,11 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
     rows[index] ??= [];
   }
 
-  /**
-   * the parents a member hangs from in the picture: the parents by blood, and with a single parent also that
-   * parent's partner who is the member's stepparent, so a stepchild hangs from the couple like the couple's children
-   */
-  const drawnParents = (id: string) => {
-    const parents = graph.parentsOf(id);
-    if (parents.length !== 1) {
-      return parents;
-    }
-    const stepParent = graph.stepParentsOf(id).find((other) => graph.partnersOf(parents[0]).includes(other));
-    return stepParent ? [parents[0], stepParent] : parents;
-  };
-
   /** members with the same parents (or the same partner's parents, or joined as siblings) belong to one family */
   const familyOf = (unit: string[]) => {
     const withParents = unit.find((id) => graph.parentsOf(id).length > 0);
     if (withParents) {
-      return [...drawnParents(withParents)].sort().join(',');
+      return [...graph.parentsOf(withParents)].sort().join(',');
     }
     const withSiblings = unit.find((id) => graph.linkedSiblingsOf(id).length > 0);
     return withSiblings ? `siblings:${graph.siblingGroup(withSiblings).sort()[0]}` : `own:${unit[0]}`;
@@ -529,7 +516,7 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
   }
   for (let sweep = 0; sweep < 4; sweep++) {
     for (const row of rows.slice(1)) {
-      placeRow(row, (id) => average(drawnParents(id)) ?? x.get(id));
+      placeRow(row, (id) => average(graph.parentsOf(id)) ?? x.get(id));
     }
     for (const row of rows) {
       placeRow(row, (id) => (graph.parentsOf(id).length > 0 ? x.get(id) : (average(graph.siblingGroup(id)) ?? x.get(id))));
@@ -539,7 +526,7 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
     }
   }
   for (const row of rows.slice(1)) {
-    placeRow(row, (id) => average(drawnParents(id)) ?? x.get(id));
+    placeRow(row, (id) => average(graph.parentsOf(id)) ?? x.get(id));
   }
 
   const minX = Math.min(...x.values()) - width / 2;
@@ -567,7 +554,7 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
 
   const families = new Map<string, { parents: string[]; children: string[] }>();
   for (const id of graph.members.keys()) {
-    const parents = [...drawnParents(id)].sort();
+    const parents = [...graph.parentsOf(id)].sort();
     if (parents.length === 0) {
       continue;
     }
@@ -576,11 +563,11 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
     family.children.push(id);
     families.set(key, family);
   }
-  // a stepparent who does not share the line of the stepchild's parent gets a dashed line of their own
+  // a stepparent gets a dashed line of their own down to the stepchild
   for (const link of graph.links) {
     const from = position.get(link.fromId);
     const to = position.get(link.toId);
-    if (link.type !== 'parent' || !link.isStep || !from || !to || drawnParents(link.toId).includes(link.fromId)) {
+    if (link.type !== 'parent' || !link.isStep || !from || !to) {
       continue;
     }
     const bottom = from.y + height / 2;
@@ -635,10 +622,10 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
       const parentNodes = parents.map((id) => position.get(id)!);
       const childNodes = children.map((id) => position.get(id)!);
       const xs = [...parentNodes, ...childNodes].map((node) => node.x);
-      return { parents, children, parentNodes, childNodes, minX: Math.min(...xs), maxX: Math.max(...xs) };
+      return { parents, parentNodes, childNodes, minX: Math.min(...xs), maxX: Math.max(...xs) };
     })
     .sort((a, b) => a.minX - b.minX);
-  for (const { parents, children, parentNodes, childNodes, minX, maxX } of familyLines) {
+  for (const { parents, parentNodes, childNodes, minX, maxX } of familyLines) {
     const bottom = Math.max(...parentNodes.map((node) => node.y)) + height / 2;
     const ends = levelEnds.get(bottom) ?? LEVELS.map(() => -Infinity);
     levelEnds.set(bottom, ends);
@@ -677,11 +664,9 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
         [Math.max(...busXs), busY],
       ],
     });
-    for (const [index, child] of childNodes.entries()) {
-      // a stepchild of one of the two gets a dashed end
-      const isStepChild = graph.parentsOf(children[index]).length < parents.length;
+    for (const child of childNodes) {
       lines.push({
-        kind: isStepChild ? 'step' : 'child',
+        kind: 'child',
         points: [
           [child.x, busY],
           [child.x, child.y - height / 2],

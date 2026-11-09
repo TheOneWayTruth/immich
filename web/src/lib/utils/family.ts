@@ -563,11 +563,15 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
     family.children.push(id);
     families.set(key, family);
   }
-  // a stepparent gets a dashed line of their own down to the stepchild
+  // a child hangs only from their parents by blood; a stepparent who is the partner of one of them needs no line,
+  // the partner line already says it. Any other stepparent gets a dashed line of their own down to the stepchild
   for (const link of graph.links) {
     const from = position.get(link.fromId);
     const to = position.get(link.toId);
     if (link.type !== 'parent' || !link.isStep || !from || !to) {
+      continue;
+    }
+    if (graph.parentsOf(link.toId).some((parentId) => graph.partnersOf(parentId).includes(link.fromId))) {
       continue;
     }
     const bottom = from.y + height / 2;

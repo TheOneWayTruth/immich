@@ -185,7 +185,18 @@ describe('FamilyGraph.relation', () => {
     const layout = layoutFamily(wick);
     const node = (id: string) => layout.nodes.find((item) => item.id === id)!;
     expect(node('eugen').y).toBeLessThan(node('nikol').y);
-    expect(layout.lines.filter(({ kind }) => kind === 'step')).toHaveLength(2);
+    // nikol hangs from lena only: eugen is lena's partner, so no line of his own
+    expect(layout.lines.filter(({ kind }) => kind === 'step')).toHaveLength(0);
+    const fromLena = layout.lines.some(
+      ({ kind, points: [[x, y]] }) => kind === 'child' && x === node('lena').x && y === node('lena').y + FAMILY_CARD.height / 2,
+    );
+    expect(fromLena).toBe(true);
+    // a stepparent who is not the partner of a parent gets a dashed line
+    const other = new FamilyGraph(
+      [member('mom', 'female'), member('dad', 'male'), member('kid'), member('godfather', 'male')],
+      [parent('mom', 'kid'), parent('dad', 'kid'), partner('mom', 'dad'), step('godfather', 'kid')],
+    );
+    expect(layoutFamily(other).lines.filter(({ kind }) => kind === 'step')).toHaveLength(1);
   });
 
   it('uses "other" when the gender is not known', () => {

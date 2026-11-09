@@ -7,6 +7,7 @@ import {
   FamilyMemberCreateDto,
   FamilyMemberUpdateDto,
   FamilyRelationCreateDto,
+  FamilyStepUpdateDto,
   FamilyTreeResponseDto,
 } from 'src/dtos/family.dto.js';
 import { ApiTag, Permission } from 'src/enum.js';
@@ -79,11 +80,23 @@ export class FamilyController {
     return this.service.addRelation(auth, dto);
   }
 
+  @Post('relations/step')
+  @Authenticated({ permission: Permission.PersonUpdate })
+  @Endpoint({
+    summary: 'Mark a parent as stepparent or parent by blood',
+    description:
+      'Say whether a parent (stored, or the partner of the only other parent) is a stepparent or a parent by blood of a child.',
+    history: new HistoryBuilder().added('v3.3.6').beta('v3.3.6'),
+  })
+  setFamilyStep(@Auth() auth: AuthDto, @Body() dto: FamilyStepUpdateDto): Promise<FamilyTreeResponseDto> {
+    return this.service.setStep(auth, dto);
+  }
+
   @Post('relations/remove')
   @Authenticated({ permission: Permission.PersonUpdate })
   @Endpoint({
     summary: 'Remove a family link',
-    description: 'Remove one parent, partner or sibling link.',
+    description: 'Remove one stored parent, partner or sibling link.',
     history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
   })
   removeFamilyLink(@Auth() auth: AuthDto, @Body() dto: FamilyLinkDto): Promise<FamilyTreeResponseDto> {

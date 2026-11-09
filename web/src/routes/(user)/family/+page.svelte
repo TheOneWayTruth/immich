@@ -196,10 +196,19 @@
     }
     const id = selected.id;
     const linkedSiblings = graph.linkedSiblingsOf(id);
-    const rows: Array<{ id: string; link?: FamilyLink }> = [
-      ...graph
-        .parentsOf(id)
-        .map((other) => ({ id: other, link: { type: 'parent', fromId: other, toId: id } as const })),
+    /** step: the parent and child of a parent link, which can be switched between by blood and step */
+    type Row = { id: string; link?: FamilyLink; step?: { parentId: string; childId: string; isStep: boolean } };
+    const parentRow = (parentId: string, childId: string, other: string): Row => {
+      const link = graph.parentLink(parentId, childId);
+      return {
+        id: other,
+        // an inferred parent is not stored, so there is nothing to remove; it can only become a stepparent
+        link: link && !link.inferred ? link : undefined,
+        step: { parentId, childId, isStep: !!link?.isStep },
+      };
+    };
+    const rows: Row[] = [
+      ...[...graph.parentsOf(id), ...graph.stepParentsOf(id)].map((other) => parentRow(other, id, other)),
       ...graph
         .partnersOf(id)
         .map((other) => ({ id: other, link: { type: 'partner', fromId: id, toId: other } as const })),
@@ -207,9 +216,7 @@
         id: other,
         link: linkedSiblings.includes(other) ? ({ type: 'sibling', fromId: id, toId: other } as const) : undefined,
       })),
-      ...graph
-        .childrenOf(id)
-        .map((other) => ({ id: other, link: { type: 'parent', fromId: id, toId: other } as const })),
+      ...[...graph.childrenOf(id), ...graph.stepChildrenOf(id)].map((other) => parentRow(id, other, other)),
     ];
     return rows;
   });
@@ -253,7 +260,7 @@
                   points={line.points.map(([x, y]) => `${x},${y}`).join(' ')}
                   fill="none"
                   class={line.kind === 'partner' ? 'stroke-primary/60' : 'stroke-gray-400 dark:stroke-gray-500'}
-                  stroke-dasharray={line.kind === 'sibling' ? '5 4' : undefined}
+                  stroke-dasharray={line.kind === 'sibling' || line.kind === 'step' ? '5 4' : undefined}
                   stroke-width={line.kind === 'partner' ? 3 : 1.5}
                 />
               {/each}
@@ -366,7 +373,7 @@
         {#if relatives.length > 0}
           <div class="flex flex-col gap-1">
             <Text size="small" color="muted" class="font-medium">{$t('family_relatives')}</Text>
-            {#each relatives as relative (relative.id + (relative.link?.type ?? 'sibling'))}
+            {#each relatives as relative (relative.id + (relative.step ? 'parent' : (relative.link?.type ?? 'sibling')))}
               <div class="flex items-center gap-1">
                 <button
                   type="button"
@@ -379,6 +386,20 @@
                     <Text size="tiny" class="truncate text-primary">{relationTo(relative.id, id)}</Text>
                   </div>
                 </button>
+                {#if relative.step}
+                  {@const step = relative.step}
+                  <Button
+                    size="tiny"
+                    shape="round"
+                    variant={step.isStep ? 'filled' : 'outline'}
+                    color={step.isStep ? 'primary' : 'secondary'}
+                    title={$t('family_step_description')}
+                    disabled={busy}
+                    onclick={() => run(() => familyApi.setStep({ ...step, isStep: !step.isStep }))}
+                  >
+                    {$t('family_step')}
+                  </Button>
+                {/if}
                 {#if relative.link}
                   {@const link = relative.link}
                   <IconButton

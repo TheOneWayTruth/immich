@@ -1200,6 +1200,8 @@
   "family_remove_link": "Remove this link",
   "family_remove_member": "Remove from family tree",
   "family_remove_member_prompt": "Remove {name} and their links from the family tree? The person and their photos stay.",
+  "family_step": "Step",
+  "family_step_description": "A stepparent or stepchild, not related by blood",
   "family_tree": "Family tree",
   "family_unknown_person": "Unknown person",
   "family_zoom_in": "Zoom in",

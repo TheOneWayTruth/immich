@@ -14,8 +14,11 @@ export type FamilyMember = {
   birthDate: string | null;
 };
 
-/** parent links point from the parent to the child */
-export type FamilyLink = { type: FamilyLinkType; fromId: string; toId: string };
+/**
+ * parent links point from the parent to the child. isStep marks a stepparent; inferred links are not stored:
+ * the only partner of a child's only parent by blood is taken as the second parent
+ */
+export type FamilyLink = { type: FamilyLinkType; fromId: string; toId: string; isStep?: boolean; inferred?: boolean };
 
 export type FamilyTreeResponse = { members: FamilyMember[]; links: FamilyLink[]; memberId?: string };
 
@@ -38,9 +41,17 @@ export const familyApi = {
   setGender: (id: string, gender: FamilyGender | null) => api(`/members/${id}`, { method: 'PATCH', body: { gender } }),
   deleteMember: (id: string) => api(`/members/${id}`, { method: 'DELETE' }),
   /** personId is the relative (added to the tree if needed), otherId someone in the tree */
-  addRelation: (body: { personId: string; relation: FamilyRelation; otherId: string; gender?: FamilyGender }) =>
-    api('/relations', { method: 'POST', body }),
-  removeLink: (link: FamilyLink) => api('/relations/remove', { method: 'POST', body: link }),
+  addRelation: (body: {
+    personId: string;
+    relation: FamilyRelation;
+    otherId: string;
+    gender?: FamilyGender;
+    isStep?: boolean;
+  }) => api('/relations', { method: 'POST', body }),
+  setStep: (body: { parentId: string; childId: string; isStep: boolean }) =>
+    api('/relations/step', { method: 'POST', body }),
+  removeLink: ({ type, fromId, toId }: FamilyLink) =>
+    api('/relations/remove', { method: 'POST', body: { type, fromId, toId } }),
 };
 
 /**
@@ -58,6 +69,8 @@ export class FamilyGraph {
   readonly members = new Map<string, FamilyMember>();
   private readonly parents = new Map<string, string[]>();
   private readonly children = new Map<string, string[]>();
+  private readonly stepParents = new Map<string, string[]>();
+  private readonly stepChildren = new Map<string, string[]>();
   private readonly partners = new Map<string, string[]>();
   private readonly linkedSiblings = new Map<string, string[]>();
   /**
@@ -77,12 +90,17 @@ export class FamilyGraph {
       this.children.set(member.id, []);
       this.partners.set(member.id, []);
       this.linkedSiblings.set(member.id, []);
+      this.stepParents.set(member.id, []);
+      this.stepChildren.set(member.id, []);
     }
-    for (const { type, fromId, toId } of links) {
+    for (const { type, fromId, toId, isStep } of links) {
       if (!this.members.has(fromId) || !this.members.has(toId)) {
         continue;
       }
-      if (type === 'parent') {
+      if (type === 'parent' && isStep) {
+        this.stepParents.get(toId)!.push(fromId);
+        this.stepChildren.get(fromId)!.push(toId);
+      } else if (type === 'parent') {
         this.parents.get(toId)!.push(fromId);
         this.children.get(fromId)!.push(toId);
       } else {
@@ -98,12 +116,27 @@ export class FamilyGraph {
     }
   }
 
+  /** parents by blood */
   parentsOf(id: string) {
     return this.parents.get(id) ?? [];
   }
 
+  /** children by blood */
   childrenOf(id: string) {
     return this.children.get(id) ?? [];
+  }
+
+  stepParentsOf(id: string) {
+    return this.stepParents.get(id) ?? [];
+  }
+
+  stepChildrenOf(id: string) {
+    return this.stepChildren.get(id) ?? [];
+  }
+
+  /** the stored or inferred parent link between the two, if any */
+  parentLink(parentId: string, childId: string) {
+    return this.links.find((link) => link.type === 'parent' && link.fromId === parentId && link.toId === childId);
   }
 
   partnersOf(id: string) {
@@ -194,7 +227,11 @@ export class FamilyGraph {
       const parentsA = this.parentsOf(a);
       const parentsB = this.parentsOf(b);
       const shared = parentsA.filter((id) => parentsB.includes(id)).length;
-      best.half = shared === 1 && parentsA.length === 2 && parentsB.length === 2;
+      // the other parent differs: both are known, or one's parent is only the other's stepparent
+      const stepOfOther =
+        parentsA.some((id) => this.stepParentsOf(b).includes(id)) ||
+        parentsB.some((id) => this.stepParentsOf(a).includes(id));
+      best.half = shared === 1 && ((parentsA.length === 2 && parentsB.length === 2) || stepOfOther);
     }
     return best;
   }
@@ -238,6 +275,13 @@ export class FamilyGraph {
     const blood = this.blood(a, b);
     if (blood) {
       return this.bloodLabel(blood, gender);
+    }
+
+    if (this.stepParentsOf(b).includes(a)) {
+      return { key: 'family_rel_step_parent', values: { gender } };
+    }
+    if (this.stepParentsOf(a).includes(b)) {
+      return { key: 'family_rel_step_child', values: { gender } };
     }
 
     if (this.partnersOf(a).includes(b)) {
@@ -284,10 +328,12 @@ export class FamilyGraph {
       }
     }
 
-    // children of two partners that do not share a parent
-    for (const parentA of this.parentsOf(a)) {
-      for (const parentB of this.parentsOf(b)) {
-        if (this.partnersOf(parentA).includes(parentB)) {
+    // children of two partners that do not share a parent, or of a parent and a stepparent
+    const parentsA = [...this.parentsOf(a), ...this.stepParentsOf(a)];
+    const parentsB = [...this.parentsOf(b), ...this.stepParentsOf(b)];
+    for (const parentA of parentsA) {
+      for (const parentB of parentsB) {
+        if (parentA === parentB || this.partnersOf(parentA).includes(parentB)) {
           return { key: 'family_rel_step_sibling', values: { gender } };
         }
       }
@@ -327,7 +373,7 @@ export class FamilyGraph {
 }
 
 export type FamilyLayoutNode = { id: string; x: number; y: number };
-export type FamilyLayoutLine = { points: Array<[number, number]>; kind: 'child' | 'partner' | 'sibling' };
+export type FamilyLayoutLine = { points: Array<[number, number]>; kind: 'child' | 'partner' | 'sibling' | 'step' };
 export type FamilyLayout = { nodes: FamilyLayoutNode[]; lines: FamilyLayoutLine[]; width: number; height: number };
 
 /** gapX is between members of one family, familyGap between different families */
@@ -352,8 +398,8 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
       const id = queue.shift()!;
       const gen = generation.get(id)!;
       const next: Array<[string, number]> = [
-        ...graph.parentsOf(id).map((other): [string, number] => [other, gen - 1]),
-        ...graph.childrenOf(id).map((other): [string, number] => [other, gen + 1]),
+        ...[...graph.parentsOf(id), ...graph.stepParentsOf(id)].map((other): [string, number] => [other, gen - 1]),
+        ...[...graph.childrenOf(id), ...graph.stepChildrenOf(id)].map((other): [string, number] => [other, gen + 1]),
         ...graph.partnersOf(id).map((other): [string, number] => [other, gen]),
         ...graph.linkedSiblingsOf(id).map((other): [string, number] => [other, gen]),
       ];
@@ -517,6 +563,26 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
     family.children.push(id);
     families.set(key, family);
   }
+  // a stepparent gets a dashed line of their own down to the stepchild
+  for (const link of graph.links) {
+    const from = position.get(link.fromId);
+    const to = position.get(link.toId);
+    if (link.type !== 'parent' || !link.isStep || !from || !to) {
+      continue;
+    }
+    const bottom = from.y + height / 2;
+    const midY = bottom + gapY / 2 + 8;
+    lines.push({
+      kind: 'step',
+      points: [
+        [from.x, bottom],
+        [from.x, midY],
+        [to.x, midY],
+        [to.x, to.y - height / 2],
+      ],
+    });
+  }
+
   // siblings without a known parent get a line above them that joins them
   const siblingBrackets = new Map<string, string[]>();
   for (const id of graph.members.keys()) {

@@ -8,7 +8,7 @@
     type FamilyTreeResponse,
   } from '$lib/utils/family';
   import { handleError } from '$lib/utils/handle-error';
-  import { Field, FormModal, Select, Stack } from '@immich/ui';
+  import { Checkbox, Field, FormModal, Label, Select, Stack } from '@immich/ui';
   import { mdiAccountMultiplePlusOutline } from '@mdi/js';
   import { t, type Translations } from 'svelte-i18n';
 
@@ -41,7 +41,10 @@
   );
 
   let choice = $state('mother');
+  let isStep = $state(false);
   let pick = $state<FamilyPick>();
+  // only parents and children can be step relatives
+  const canBeStep = $derived(['parent', 'child'].includes(choices.find(({ value }) => value === choice)?.relation ?? ''));
   let saving = $state(false);
 
   // someone already related by blood or as a partner cannot become another close relative (a father is no brother);
@@ -61,6 +64,10 @@
   const exclude = $derived.by(() => {
     const gender = choices.find(({ value }) => value === choice)?.gender;
     const excluded = [memberId];
+    if (canBeStep && isStep) {
+      // a stepparent is often already in the tree as the partner of a parent, or even taken as a parent
+      return excluded;
+    }
     for (const member of graph.members.values()) {
       const relation = graph.relation(member.id, memberId);
       if ((relation && closeRelations.has(relation.key)) || (gender && member.gender && member.gender !== gender)) {
@@ -89,6 +96,7 @@
         relation: selected.relation,
         otherId: memberId,
         gender: selected.gender,
+        isStep: canBeStep && isStep,
       });
       onClose(tree);
     } catch (error) {
@@ -112,6 +120,12 @@
     <Field label={$t('family_relationship')}>
       <Select bind:value={choice} {options} />
     </Field>
+    {#if canBeStep}
+      <div class="flex items-center gap-2">
+        <Checkbox id="family-relative-step" size="small" bind:checked={isStep} />
+        <Label for="family-relative-step" label={$t('family_step')} />
+      </div>
+    {/if}
     <FamilyPersonPicker
       {graph}
       {nameOf}

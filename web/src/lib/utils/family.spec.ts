@@ -142,6 +142,52 @@ describe('FamilyGraph.relation', () => {
     expect(bracket.some(({ points: [[, y1], [, y2]] }) => y1 === y2 && y1 < node('anna').y)).toBe(true);
   });
 
+  it('knows stepparents, and a half brother through a stepmother', () => {
+    // sergej is the father of alexander and alexej; irina is the mother of alexander only (inferred for him),
+    // for alexej she is stored as stepmother. eugen is the stepfather of nikol, lena her mother
+    const step = (fromId: string, toId: string): FamilyLink => ({ type: 'parent', fromId, toId, isStep: true });
+    const inferred = (fromId: string, toId: string): FamilyLink => ({ type: 'parent', fromId, toId, inferred: true });
+    const wick = new FamilyGraph(
+      [
+        member('sergej', 'male'),
+        member('irina', 'female'),
+        member('alexander', 'male'),
+        member('alexej', 'male'),
+        member('lena', 'female'),
+        member('eugen', 'male'),
+        member('nikol', 'female'),
+        member('tim', 'male'),
+      ],
+      [
+        partner('irina', 'sergej'),
+        parent('sergej', 'alexander'),
+        inferred('irina', 'alexander'),
+        parent('sergej', 'alexej'),
+        step('irina', 'alexej'),
+        partner('eugen', 'lena'),
+        parent('lena', 'nikol'),
+        step('eugen', 'nikol'),
+        parent('eugen', 'tim'),
+      ],
+    );
+    expect(wick.relation('irina', 'alexander')?.key).toBe('family_rel_parent');
+    expect(wick.relation('irina', 'alexej')).toEqual({ key: 'family_rel_step_parent', values: { gender: 'female' } });
+    expect(wick.relation('alexej', 'irina')).toEqual({ key: 'family_rel_step_child', values: { gender: 'male' } });
+    expect(wick.relation('alexej', 'alexander')?.key).toBe('family_rel_half_sibling');
+    expect(wick.relation('eugen', 'nikol')?.key).toBe('family_rel_step_parent');
+    expect(wick.relation('lena', 'nikol')?.key).toBe('family_rel_parent');
+    // a stepparent's own child
+    expect(wick.relation('tim', 'nikol')?.key).toBe('family_rel_step_sibling');
+    // stepparents are not parents by blood
+    expect(wick.parentsOf('nikol')).toEqual(['lena']);
+    expect(wick.stepParentsOf('nikol')).toEqual(['eugen']);
+
+    const layout = layoutFamily(wick);
+    const node = (id: string) => layout.nodes.find((item) => item.id === id)!;
+    expect(node('eugen').y).toBeLessThan(node('nikol').y);
+    expect(layout.lines.filter(({ kind }) => kind === 'step')).toHaveLength(2);
+  });
+
   it('uses "other" when the gender is not known', () => {
     expect(new FamilyGraph([member('a'), member('b')], [parent('a', 'b')]).relation('a', 'b')).toEqual({
       key: 'family_rel_parent',

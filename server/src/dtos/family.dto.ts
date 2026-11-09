@@ -49,8 +49,17 @@ const FamilyRelationCreateSchema = z
     relation: FamilyRelationSchema.describe('What personId is to otherId'),
     otherId: z.uuidv4().describe('A person in the family tree'),
     gender: FamilyGenderSchema.optional().describe('Gender of personId, e.g. female for "mother"'),
+    isStep: z.boolean().optional().describe('A stepparent or stepchild (parent and child only)'),
   })
   .meta({ id: 'FamilyRelationCreateDto' });
+
+const FamilyStepUpdateSchema = z
+  .object({
+    parentId: z.uuidv4(),
+    childId: z.uuidv4(),
+    isStep: z.boolean().describe('true: parentId is a stepparent of childId; false: a parent by blood'),
+  })
+  .meta({ id: 'FamilyStepUpdateDto' });
 
 const FamilyLinkSchema = z
   .object({
@@ -59,6 +68,13 @@ const FamilyLinkSchema = z
     toId: z.uuidv4().describe('The child, or the other partner or sibling'),
   })
   .meta({ id: 'FamilyLinkDto' });
+
+const FamilyTreeLinkSchema = FamilyLinkSchema.extend({
+  isStep: z.boolean().describe('A stepparent (parent links only)'),
+  inferred: z
+    .boolean()
+    .describe('Not stored: the only partner of the only parent by blood is taken as the second parent'),
+}).meta({ id: 'FamilyTreeLinkDto' });
 
 const FamilyMemberResponseSchema = z
   .object({
@@ -72,7 +88,7 @@ const FamilyMemberResponseSchema = z
 const FamilyTreeResponseSchema = z
   .object({
     members: z.array(FamilyMemberResponseSchema),
-    links: z.array(FamilyLinkSchema),
+    links: z.array(FamilyTreeLinkSchema),
     memberId: z.string().optional().describe('The member that was added or changed'),
   })
   .meta({ id: 'FamilyTreeResponseDto' });
@@ -81,5 +97,6 @@ export class FamilyMemberCreateDto extends createZodDto(FamilyMemberCreateSchema
 export class FamilyMemberUpdateDto extends createZodDto(FamilyMemberUpdateSchema) {}
 export class FamilyRelationCreateDto extends createZodDto(FamilyRelationCreateSchema) {}
 export class FamilyLinkDto extends createZodDto(FamilyLinkSchema) {}
+export class FamilyStepUpdateDto extends createZodDto(FamilyStepUpdateSchema) {}
 export class FamilyMemberResponseDto extends createZodDto(FamilyMemberResponseSchema) {}
 export class FamilyTreeResponseDto extends createZodDto(FamilyTreeResponseSchema) {}

@@ -317,6 +317,10 @@ export class PersonRepository {
       if (!rows[0]?.exists) {
         return;
       }
+      // a tree from before stepparents may not have been opened since the update
+      await sql`alter table "family_relation" add column if not exists "isStep" boolean not null default false`.execute(
+        tx,
+      );
 
       const { rows: gone } = await sql<{ id: string }>`
         select f."personGroupId" as "id" from "family_person" f
@@ -342,15 +346,15 @@ export class PersonRepository {
           select r."type",
             case when r."fromId" = any(${goneIds}::uuid[]) then ${targetId}::uuid else r."fromId" end as "fromId",
             case when r."toId" = any(${goneIds}::uuid[]) then ${targetId}::uuid else r."toId" end as "toId",
-            r."createdAt"
+            r."createdAt", r."isStep"
           from "family_relation" r
           where r."fromId" = any(${goneIds}::uuid[]) or r."toId" = any(${goneIds}::uuid[])
         )
-        insert into "family_relation" ("type", "fromId", "toId", "createdAt")
+        insert into "family_relation" ("type", "fromId", "toId", "createdAt", "isStep")
         select "type",
           case when "type" = 'parent' then "fromId" else least("fromId", "toId") end,
           case when "type" = 'parent' then "toId" else greatest("fromId", "toId") end,
-          "createdAt"
+          "createdAt", "isStep"
         from "moved"
         where "fromId" != "toId"
         on conflict do nothing

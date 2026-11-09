@@ -18,6 +18,8 @@ export interface FamilyLink {
   /** parent links point from the parent to the child; partner and sibling links are stored with fromId < toId */
   fromId: string;
   toId: string;
+  /** a stepparent: the parent link is not by blood (parent links only) */
+  isStep: boolean;
 }
 
 // one family tree per Immich, shared by all users. It lives in its own tables, outside Immich's schema and
@@ -42,6 +44,7 @@ const createTables = [
     )
   `,
   sql`create index if not exists "family_relation_toId_idx" on "family_relation" ("toId")`,
+  sql`alter table "family_relation" add column if not exists "isStep" boolean not null default false`,
   sql`create table if not exists "family_migration" ("name" text primary key)`,
 ];
 
@@ -90,16 +93,16 @@ const fromPerUserTree = [
 ];
 
 /**
- * a child with one known parent whose parent has exactly one partner gets that partner as second parent,
- * so the children of a couple are siblings by default
+ * Only what was said is stored; a child with one parent by blood whose parent has exactly one partner gets that
+ * partner as second parent when the tree is read. The tree used to store those second parents, so a second parent
+ * that the rule gives anyway is removed once (the later of the two, which was usually added automatically).
  */
-const completeParents = (childIds: string[]) => sql`
-  with "single_parent" as (
-    select "toId" as "childId", min("fromId"::text)::uuid as "parentId"
-    from "family_relation"
-    where "type" = 'parent' and "toId" = any(${childIds}::uuid[])
-    group by "toId"
-    having count(*) = 1
+const removeInferableParents = sql`
+  with "bio" as (
+    select "fromId", "toId", "createdAt" from "family_relation" where "type" = 'parent' and not "isStep"
+  ),
+  "two_parents" as (
+    select "toId" from "bio" group by "toId" having count(*) = 2
   ),
   "partner_pair" as (
     select "fromId" as "id", "toId" as "partnerId" from "family_relation" where "type" = 'partner'
@@ -107,30 +110,22 @@ const completeParents = (childIds: string[]) => sql`
     select "toId", "fromId" from "family_relation" where "type" = 'partner'
   ),
   "only_partner" as (
-    select "id", min("partnerId"::text)::uuid as "partnerId"
-    from "partner_pair"
-    group by "id"
-    having count(*) = 1
+    select "id", min("partnerId"::text)::uuid as "partnerId" from "partner_pair" group by "id" having count(*) = 1
+  ),
+  "inferable" as (
+    -- b is the only partner of a, the other parent of the same child
+    select b."fromId", b."toId", b."createdAt"
+    from "bio" a
+    join "bio" b on b."toId" = a."toId" and b."fromId" != a."fromId"
+    join "two_parents" t on t."toId" = a."toId"
+    join "only_partner" o on o."id" = a."fromId" and o."partnerId" = b."fromId"
+  ),
+  "chosen" as (
+    select distinct on ("toId") "fromId", "toId" from "inferable" order by "toId", "createdAt" desc, "fromId"
   )
-  insert into "family_relation" ("type", "fromId", "toId")
-  select 'parent', p."partnerId", s."childId"
-  from "single_parent" s
-  join "only_partner" p on p."id" = s."parentId"
-  where p."partnerId" != s."childId"
-    and not exists (
-      select from "family_relation" c where c."type" = 'parent' and c."fromId" = s."childId" and c."toId" = p."partnerId"
-    )
-  on conflict do nothing
-`;
-
-/** inserts a partner link for every two parents of the given children, so parents are partners by default */
-const linkCoParents = (childIds: string[]) => sql`
-  insert into "family_relation" ("type", "fromId", "toId")
-  select distinct 'partner', a."fromId", b."fromId"
-  from "family_relation" a
-  join "family_relation" b on b."type" = 'parent' and b."toId" = a."toId" and a."fromId" < b."fromId"
-  where a."type" = 'parent' and a."toId" = any(${childIds}::uuid[])
-  on conflict do nothing
+  delete from "family_relation" r
+  using "chosen" c
+  where r."type" = 'parent' and r."fromId" = c."fromId" and r."toId" = c."toId"
 `;
 
 @Injectable()
@@ -148,22 +143,28 @@ export class FamilyRepository {
         select to_regclass('family_member') is not null and to_regclass('family_link') is not null as "exists"
       `.execute(this.db);
       if (old[0]?.exists) {
-        await this.db.transaction().execute(async (tx) => {
-          const { rows } = await sql`
-            insert into "family_migration" ("name") values ('one-tree-per-immich') on conflict do nothing returning "name"
-          `.execute(tx);
-          if (rows.length > 0) {
-            for (const statement of fromPerUserTree) {
-              await statement.execute(tx);
-            }
-          }
-        });
+        await this.runOnce('one-tree-per-immich', fromPerUserTree);
       }
+      await this.runOnce('only-stated-links', [removeInferableParents]);
     })().catch((error) => {
       this.tables = undefined;
       throw error;
     });
     return this.tables;
+  }
+
+  /** runs the statements in one transaction, the first time this name comes up */
+  private async runOnce(name: string, statements: Array<ReturnType<typeof sql>>) {
+    await this.db.transaction().execute(async (tx) => {
+      const { rows } = await sql`
+        insert into "family_migration" ("name") values (${name}) on conflict do nothing returning "name"
+      `.execute(tx);
+      if (rows.length > 0) {
+        for (const statement of statements) {
+          await statement.execute(tx);
+        }
+      }
+    });
   }
 
   async getMembers(userId: string): Promise<FamilyMember[]> {
@@ -190,7 +191,7 @@ export class FamilyRepository {
   async getLinks(): Promise<FamilyLink[]> {
     await this.ensureTables();
     const { rows } = await sql<FamilyLink>`
-      select "type", "fromId", "toId" from "family_relation" order by "createdAt", "fromId", "toId"
+      select "type", "fromId", "toId", "isStep" from "family_relation" order by "createdAt", "fromId", "toId"
     `.execute(this.db);
     return rows;
   }
@@ -213,33 +214,22 @@ export class FamilyRepository {
     await sql`delete from "family_person" where "personGroupId" = ${id}`.execute(this.db);
   }
 
-  async addLink({ type, fromId, toId }: FamilyLink) {
+  /** adds a link, or for a parent link that exists already sets whether it is a stepparent */
+  async addLink({ type, fromId, toId, isStep = false }: Omit<FamilyLink, 'isStep'> & { isStep?: boolean }) {
     await this.ensureTables();
     const [a, b] = type === FamilyLinkType.Parent ? [fromId, toId] : [fromId, toId].sort();
+    const step = type === FamilyLinkType.Parent && isStep;
     await sql`
-      insert into "family_relation" ("type", "fromId", "toId") values (${type}, ${a}, ${b}) on conflict do nothing
+      insert into "family_relation" ("type", "fromId", "toId", "isStep") values (${type}, ${a}, ${b}, ${step})
+      on conflict ("fromId", "toId", "type") do update set "isStep" = excluded."isStep"
     `.execute(this.db);
   }
 
-  async removeLink({ type, fromId, toId }: FamilyLink) {
+  async removeLink({ type, fromId, toId }: Pick<FamilyLink, 'type' | 'fromId' | 'toId'>) {
     await this.ensureTables();
     const [a, b] = type === FamilyLinkType.Parent ? [fromId, toId] : [fromId, toId].sort();
     await sql`
       delete from "family_relation" where "type" = ${type} and "fromId" = ${a} and "toId" = ${b}
     `.execute(this.db);
-  }
-
-  async completeParents(childIds: string[]) {
-    if (childIds.length > 0) {
-      await this.ensureTables();
-      await completeParents(childIds).execute(this.db);
-    }
-  }
-
-  async linkCoParents(childIds: string[]) {
-    if (childIds.length > 0) {
-      await this.ensureTables();
-      await linkCoParents(childIds).execute(this.db);
-    }
   }
 }

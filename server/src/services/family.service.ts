@@ -7,40 +7,96 @@ import {
   FamilyMemberUpdateDto,
   FamilyRelation,
   FamilyRelationCreateDto,
+  FamilyStepUpdateDto,
   FamilyTreeResponseDto,
 } from 'src/dtos/family.dto.js';
 import { FamilyLink, FamilyMember, FamilyRepository } from 'src/repositories/family.repository.js';
 import { PersonRepository } from 'src/repositories/person.repository.js';
 
+type TreeLink = FamilyLink & { inferred: boolean };
+
+/**
+ * The family tree as stored, plus what follows from it: a child with exactly one parent by blood whose parent has
+ * exactly one partner has that partner as second parent, unless that partner is stored as their stepparent.
+ */
 class Tree {
   readonly members: Map<string, FamilyMember>;
+  /** stored and inferred links */
+  readonly links: TreeLink[];
 
   constructor(
     members: FamilyMember[],
-    readonly links: FamilyLink[],
+    readonly stored: FamilyLink[],
   ) {
     this.members = new Map(members.map((member) => [member.id, member]));
+    this.links = stored.map((link) => ({ ...link, inferred: false }));
+    for (const childId of this.members.keys()) {
+      const otherParent = this.inferredParentOf(childId);
+      if (otherParent) {
+        this.links.push({ type: FamilyLinkType.Parent, fromId: otherParent, toId: childId, isStep: false, inferred: true });
+      }
+    }
+  }
+
+  private inferredParentOf(childId: string) {
+    const stated = this.statedParentsOf(childId);
+    if (stated.length !== 1) {
+      return;
+    }
+    const partners = this.partnersOf(stated[0]);
+    if (partners.length !== 1) {
+      return;
+    }
+    const [partnerId] = partners;
+    const linked = this.stored.some(
+      (link) => link.type === FamilyLinkType.Parent && link.fromId === partnerId && link.toId === childId,
+    );
+    if (partnerId === childId || linked || this.isAncestor(childId, partnerId, this.stored)) {
+      return;
+    }
+    return partnerId;
   }
 
   has(id: string) {
     return this.members.has(id);
   }
 
-  parentsOf(id: string) {
-    return this.links
-      .filter((link) => link.type === FamilyLinkType.Parent && link.toId === id)
+  partnersOf(id: string) {
+    return this.stored
+      .filter((link) => link.type === FamilyLinkType.Partner && (link.fromId === id || link.toId === id))
+      .map((link) => (link.fromId === id ? link.toId : link.fromId));
+  }
+
+  /** stored parents by blood */
+  statedParentsOf(id: string) {
+    return this.stored
+      .filter((link) => link.type === FamilyLinkType.Parent && !link.isStep && link.toId === id)
       .map((link) => link.fromId);
   }
 
+  /** parents by blood, stored or inferred */
+  parentsOf(id: string) {
+    return this.links
+      .filter((link) => link.type === FamilyLinkType.Parent && !link.isStep && link.toId === id)
+      .map((link) => link.fromId);
+  }
+
+  stepParentsOf(id: string) {
+    return this.stored
+      .filter((link) => link.type === FamilyLinkType.Parent && link.isStep && link.toId === id)
+      .map((link) => link.fromId);
+  }
+
+  /** children by blood, stored or inferred */
   childrenOf(id: string) {
     return this.links
-      .filter((link) => link.type === FamilyLinkType.Parent && link.fromId === id)
+      .filter((link) => link.type === FamilyLinkType.Parent && !link.isStep && link.fromId === id)
       .map((link) => link.toId);
   }
 
   /** members joined by sibling links only, without a known shared parent */
   linkedSiblingsOf(id: string) {
-    return this.links
+    return this.stored
       .filter((link) => link.type === FamilyLinkType.Sibling && (link.fromId === id || link.toId === id))
       .map((link) => (link.fromId === id ? link.toId : link.fromId));
   }
@@ -60,19 +116,23 @@ class Tree {
     return [...group];
   }
 
-  isAncestor(ancestorId: string, id: string): boolean {
+  /** whether ancestorId is above id through any parent link, by blood or step */
+  isAncestor(ancestorId: string, id: string, links: FamilyLink[] = this.links): boolean {
     const seen = new Set<string>();
     const queue = [id];
     while (queue.length > 0) {
-      for (const parentId of this.parentsOf(queue.shift()!)) {
-        if (parentId === ancestorId) {
-          return true;
-        }
-        if (seen.has(parentId)) {
+      const current = queue.shift()!;
+      for (const link of links) {
+        if (link.type !== FamilyLinkType.Parent || link.toId !== current) {
           continue;
         }
-        seen.add(parentId);
-        queue.push(parentId);
+        if (link.fromId === ancestorId) {
+          return true;
+        }
+        if (!seen.has(link.fromId)) {
+          seen.add(link.fromId);
+          queue.push(link.fromId);
+        }
       }
     }
     return false;
@@ -126,7 +186,7 @@ export class FamilyService {
     return this.getTree(auth);
   }
 
-  async addRelation(auth: AuthDto, { personId, relation, otherId, gender }: FamilyRelationCreateDto) {
+  async addRelation(auth: AuthDto, { personId, relation, otherId, gender, isStep = false }: FamilyRelationCreateDto) {
     let tree = await this.load(auth);
     this.requireMember(tree, otherId);
     if (personId === otherId) {
@@ -142,11 +202,11 @@ export class FamilyService {
     tree = await this.load(auth);
     switch (relation) {
       case FamilyRelation.Parent: {
-        await this.addParent(tree, personId, otherId);
+        await this.addParent(tree, personId, otherId, isStep);
         break;
       }
       case FamilyRelation.Child: {
-        await this.addParent(tree, otherId, personId);
+        await this.addParent(tree, otherId, personId, isStep);
         break;
       }
       case FamilyRelation.Sibling: {
@@ -155,8 +215,6 @@ export class FamilyService {
       }
       case FamilyRelation.Partner: {
         await this.familyRepository.addLink({ type: FamilyLinkType.Partner, fromId: personId, toId: otherId });
-        // children that only had one of the two as parent now have both
-        await this.familyRepository.completeParents([...tree.childrenOf(personId), ...tree.childrenOf(otherId)]);
         break;
       }
     }
@@ -164,19 +222,53 @@ export class FamilyService {
     return this.getTree(auth, personId);
   }
 
+  async setStep(auth: AuthDto, { parentId, childId, isStep }: FamilyStepUpdateDto) {
+    const tree = await this.load(auth);
+    this.requireMember(tree, parentId);
+    this.requireMember(tree, childId);
+    const isParent = tree.parentsOf(childId).includes(parentId);
+    const isStepParent = tree.stepParentsOf(childId).includes(parentId);
+    if (!isParent && !isStepParent) {
+      throw new BadRequestException('Not a parent of this person');
+    }
+
+    if (isStep && isParent) {
+      await this.familyRepository.addLink({ type: FamilyLinkType.Parent, fromId: parentId, toId: childId, isStep });
+    } else if (!isStep && isStepParent) {
+      // only what cannot be inferred is stored: without the step link, the only partner of the only parent follows
+      const stated = tree.statedParentsOf(childId);
+      if (stated.length === 1 && tree.partnersOf(stated[0]).length === 1 && tree.partnersOf(stated[0])[0] === parentId) {
+        await this.familyRepository.removeLink({ type: FamilyLinkType.Parent, fromId: parentId, toId: childId });
+      } else if (stated.length >= 2) {
+        throw new BadRequestException('This person already has two parents');
+      } else {
+        await this.familyRepository.addLink({ type: FamilyLinkType.Parent, fromId: parentId, toId: childId });
+      }
+    }
+
+    return this.getTree(auth, childId);
+  }
+
   async removeLink(auth: AuthDto, link: FamilyLinkDto) {
     await this.familyRepository.removeLink(link);
     return this.getTree(auth);
   }
 
-  private async addParent(tree: Tree, parentId: string, childId: string) {
-    if (tree.parentsOf(childId).includes(parentId)) {
-      return;
-    }
+  private async addParent(tree: Tree, parentId: string, childId: string, isStep: boolean) {
     if (tree.isAncestor(childId, parentId)) {
       throw new BadRequestException('This would make someone their own ancestor');
     }
-    if (tree.parentsOf(childId).length >= 2) {
+    if (isStep) {
+      if (!tree.stepParentsOf(childId).includes(parentId)) {
+        await this.familyRepository.addLink({ type: FamilyLinkType.Parent, fromId: parentId, toId: childId, isStep });
+      }
+      return;
+    }
+
+    if (tree.parentsOf(childId).includes(parentId)) {
+      return;
+    }
+    if (tree.statedParentsOf(childId).length >= 2) {
       throw new BadRequestException('This person already has two parents');
     }
 
@@ -186,12 +278,9 @@ export class FamilyService {
       .filter(
         (id) =>
           id === childId ||
-          (id !== parentId && tree.parentsOf(id).length < 2 && !tree.isAncestor(id, parentId)),
+          (id !== parentId && tree.statedParentsOf(id).length < 2 && !tree.isAncestor(id, parentId)),
       );
-    const given = await this.giveParents(tree, children, [parentId]);
-    // the child of one partner is the child of both by default, and two parents are partners by default
-    await this.familyRepository.completeParents(given);
-    await this.familyRepository.linkCoParents(given);
+    await this.giveParents(tree, children, [parentId]);
   }
 
   private async addSibling(tree: Tree, aId: string, bId: string) {
@@ -207,27 +296,30 @@ export class FamilyService {
       return;
     }
 
-    for (const [childId, ownParents, otherParents] of [
-      [aId, parentsA, parentsB],
-      [bId, parentsB, parentsA],
+    for (const [childId, ownParents, otherId] of [
+      [aId, parentsA, bId],
+      [bId, parentsB, aId],
     ] as const) {
       if (ownParents.length === 0) {
-        // the known parents of one are the parents of the other, and of everyone joined to them as siblings
-        await this.giveParents(tree, tree.siblingGroup(childId), otherParents);
+        // the stated parents of one are the parents of the other, and of everyone joined to them as siblings;
+        // a second parent that is inferred for one follows for the other the same way
+        await this.giveParents(tree, tree.siblingGroup(childId), tree.statedParentsOf(otherId));
         return;
       }
     }
 
     // one parent each: siblings share both
-    const parents = [...new Set([...parentsA, ...parentsB])];
+    const parents = [...new Set([...tree.statedParentsOf(aId), ...tree.statedParentsOf(bId)])];
     if (parents.length > 2) {
       throw new BadRequestException('They already have different parents. Add the shared parent instead.');
     }
     await this.giveParents(tree, [aId, bId], parents);
-    await this.familyRepository.linkCoParents([aId, bId]);
   }
 
-  /** adds the parents to the children, and drops sibling links that a shared parent now makes unnecessary */
+  /**
+   * adds the parents by blood to the children, and drops sibling links that a shared parent now makes unnecessary;
+   * returns the children that got them
+   */
   private async giveParents(tree: Tree, childIds: string[], parentIds: readonly string[]) {
     for (const childId of childIds) {
       for (const parentId of parentIds) {
@@ -238,7 +330,7 @@ export class FamilyService {
     }
     const given: string[] = [];
     for (const childId of childIds) {
-      const current = tree.parentsOf(childId);
+      const current = tree.statedParentsOf(childId);
       const missing = parentIds.filter((parentId) => !current.includes(parentId));
       if (current.length + missing.length > 2) {
         // a sibling with other known parents keeps them

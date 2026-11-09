@@ -1193,6 +1193,8 @@
   "family_remove_link": "Diese Verbindung entfernen",
   "family_remove_member": "Aus dem Stammbaum entfernen",
   "family_remove_member_prompt": "{name} und alle Verbindungen aus dem Stammbaum entfernen? Die Person und ihre Fotos bleiben.",
+  "family_step": "Stief",
+  "family_step_description": "Stiefelternteil oder Stiefkind, nicht blutsverwandt",
   "family_tree": "Stammbaum",
   "family_unknown_person": "Unbekannte Person",
   "family_zoom_in": "Vergrößern",

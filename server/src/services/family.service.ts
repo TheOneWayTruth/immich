@@ -233,6 +233,7 @@ export class FamilyService {
     }
 
     if (isStep && isParent) {
+      await this.keepInferredParents(tree, childId, parentId);
       await this.familyRepository.addLink({ type: FamilyLinkType.Parent, fromId: parentId, toId: childId, isStep });
     } else if (!isStep && isStepParent) {
       // only what cannot be inferred is stored: without the step link, the only partner of the only parent follows
@@ -260,6 +261,7 @@ export class FamilyService {
     }
     if (isStep) {
       if (!tree.stepParentsOf(childId).includes(parentId)) {
+        await this.keepInferredParents(tree, childId, parentId);
         await this.familyRepository.addLink({ type: FamilyLinkType.Parent, fromId: parentId, toId: childId, isStep });
       }
       return;
@@ -281,6 +283,18 @@ export class FamilyService {
           (id !== parentId && tree.statedParentsOf(id).length < 2 && !tree.isAncestor(id, parentId)),
       );
     await this.giveParents(tree, children, [parentId]);
+  }
+
+  /**
+   * an inferred parent rests on the stated parent; when that parent becomes a stepparent, the inferred one is stored
+   * so it stays (e.g. the father whose wife turns out to be the stepmother)
+   */
+  private async keepInferredParents(tree: Tree, childId: string, exceptId: string) {
+    for (const link of tree.links) {
+      if (link.inferred && link.toId === childId && link.fromId !== exceptId) {
+        await this.familyRepository.addLink({ type: FamilyLinkType.Parent, fromId: link.fromId, toId: childId });
+      }
+    }
   }
 
   private async addSibling(tree: Tree, aId: string, bId: string) {

@@ -225,6 +225,98 @@ const PersonMergeSuggestionsResponseSchema = z
 
 export class PersonMergeSuggestionsResponseDto extends createZodDto(PersonMergeSuggestionsResponseSchema) {}
 
+const PersonFaceSchema = PersonMergeSuggestionFaceSchema.extend({
+  id: z.uuidv4().describe('Face ID'),
+  takenAt: z.string().meta({ format: 'date-time' }).describe('When the photo was taken (local time)'),
+  similarity: z.number().nullable().describe("Similarity (0-1) to the person's average face"),
+}).meta({ id: 'PersonFaceDto' });
+
+const PersonFacesResponseSchema = z
+  .object({ faces: z.array(PersonFaceSchema).describe('All faces of the person, oldest photo first') })
+  .meta({ id: 'PersonFacesResponseDto' });
+
+export class PersonFacesResponseDto extends createZodDto(PersonFacesResponseSchema) {}
+
+const PersonMatchImageSchema = z
+  .object({
+    minScore: z.coerce
+      .number()
+      .min(0.1)
+      .max(1)
+      .optional()
+      .describe('Minimum face detection score (0-1). Defaults to the facial recognition setting'),
+    maxDistance: z.coerce
+      .number()
+      .min(0.1)
+      .max(2)
+      .default(0.6)
+      .describe('Maximum distance of a matching face (0-2, lower is stricter)'),
+    tileSize: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(4096)
+      .default(640)
+      .describe(
+        'Also search square tiles of this size at full resolution, for small faces. 0 searches only the whole image',
+      ),
+    numMatches: z.coerce.number().int().min(1).max(10).default(3).describe('Number of candidate people per face'),
+    withEmbedding: stringToBool.optional().describe('Also return the face embedding of each face'),
+  })
+  .meta({ id: 'PersonMatchImageDto' });
+
+const PersonMatchSchema = z.object({
+  personId: z.uuidv4().describe('Person ID'),
+  name: z.string().describe('Person name'),
+  isHidden: z.boolean().describe('Person is hidden'),
+  distance: z.number().describe('Distance to the closest face of this person (lower is more similar)'),
+  faceCount: z.int().describe('Number of close faces of this person'),
+});
+
+const PersonMatchImageResponseSchema = z
+  .object({
+    imageWidth: z.int().describe('Image width in pixels'),
+    imageHeight: z.int().describe('Image height in pixels'),
+    faces: z
+      .array(
+        z.object({
+          boundingBox: z
+            .object({ x1: z.number(), y1: z.number(), x2: z.number(), y2: z.number() })
+            .describe('Face box in image pixels'),
+          score: z.number().describe('Face detection score (0-1)'),
+          embedding: z.array(z.number()).optional().describe('Face embedding (only with withEmbedding)'),
+          matches: z.array(PersonMatchSchema).describe('Candidate people, best first'),
+        }),
+      )
+      .describe('Detected faces'),
+  })
+  .meta({ id: 'PersonMatchImageResponseDto' });
+
+const PersonMatchEmbeddingsSchema = z
+  .object({
+    embeddings: z
+      .array(z.array(z.number()).length(512))
+      .min(1)
+      .max(20)
+      .describe('Face embeddings, e.g. the average of one face seen in many video frames'),
+    maxDistance: z.number().min(0.1).max(2).default(0.6).describe('Maximum distance of a matching face'),
+    numMatches: z.int().min(1).max(10).default(3).describe('Number of candidate people per embedding'),
+  })
+  .meta({ id: 'PersonMatchEmbeddingsDto' });
+
+const PersonMatchEmbeddingsResponseSchema = z
+  .object({
+    results: z
+      .array(z.object({ matches: z.array(PersonMatchSchema).describe('Candidate people, best first') }))
+      .describe('One result per embedding, in order'),
+  })
+  .meta({ id: 'PersonMatchEmbeddingsResponseDto' });
+
+export class PersonMatchEmbeddingsDto extends createZodDto(PersonMatchEmbeddingsSchema) {}
+export class PersonMatchEmbeddingsResponseDto extends createZodDto(PersonMatchEmbeddingsResponseSchema) {}
+export class PersonMatchImageDto extends createZodDto(PersonMatchImageSchema) {}
+export class PersonMatchImageResponseDto extends createZodDto(PersonMatchImageResponseSchema) {}
+
 const AssetFaceResponseSchema = z
   .object({
     id: z.uuidv4().describe('Face ID'),

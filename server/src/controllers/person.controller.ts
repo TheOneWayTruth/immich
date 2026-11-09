@@ -12,8 +12,11 @@ import {
   Put,
   Query,
   Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiConsumes, ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
 import type { NextFunction, Response } from 'express';
 import { Endpoint, HistoryBuilder } from 'src/decorators.js';
 import { BulkIdResponseDto } from 'src/dtos/asset-ids.response.dto.js';
@@ -27,6 +30,11 @@ import {
   PeopleUsersUpsertDto,
   PersonCreateDto,
   PersonDeleteDto,
+  PersonFacesResponseDto,
+  PersonMatchEmbeddingsDto,
+  PersonMatchEmbeddingsResponseDto,
+  PersonMatchImageDto,
+  PersonMatchImageResponseDto,
   PersonMergeSuggestionDismissDto,
   PersonMergeSuggestionSearchDto,
   PersonMergeSuggestionsResponseDto,
@@ -127,6 +135,41 @@ export class PersonController {
     return this.service.dismissMergeSuggestions(auth, dto);
   }
 
+  @Post('match-image')
+  @Authenticated({ permission: Permission.PersonRead })
+  @ApiConsumes('multipart/form-data')
+  @HttpCode(HttpStatus.OK)
+  @Endpoint({
+    summary: 'Match faces in an image',
+    description:
+      'Detect the faces in an uploaded image (form field "file") and find the closest people for each face, without adding the image to the library.',
+    history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
+  })
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
+  matchImage(
+    @Auth() auth: AuthDto,
+    @UploadedFile() file: Express.Multer.File,
+    @Query() dto: PersonMatchImageDto,
+  ): Promise<PersonMatchImageResponseDto> {
+    return this.service.matchImage(auth, file, dto);
+  }
+
+  @Post('match-embeddings')
+  @Authenticated({ permission: Permission.PersonRead })
+  @HttpCode(HttpStatus.OK)
+  @Endpoint({
+    summary: 'Match face embeddings',
+    description:
+      'Find the closest people for face embeddings, e.g. the average of one face seen in many video frames (from match-image with withEmbedding).',
+    history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
+  })
+  matchEmbeddings(
+    @Auth() auth: AuthDto,
+    @Body() dto: PersonMatchEmbeddingsDto,
+  ): Promise<PersonMatchEmbeddingsResponseDto> {
+    return this.service.matchFaceEmbeddings(auth, dto);
+  }
+
   @Get(':id')
   @Authenticated({ permission: Permission.PersonRead })
   @Endpoint({
@@ -174,6 +217,18 @@ export class PersonController {
   })
   deletePerson(@Auth() auth: AuthDto, @Param() { id }: UUIDParamDto, @Body() dto: PersonDeleteDto): Promise<void> {
     return this.service.delete(auth, id, dto);
+  }
+
+  @Get(':id/faces')
+  @Authenticated({ permission: Permission.PersonRead })
+  @Endpoint({
+    summary: 'Get person faces',
+    description:
+      "Retrieve every face of a person with its bounding box and its similarity to the person's average face, to find faces that belong to someone else.",
+    history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
+  })
+  getPersonFaces(@Auth() auth: AuthDto, @Param() { id }: UUIDParamDto): Promise<PersonFacesResponseDto> {
+    return this.service.getPersonFaces(auth, id);
   }
 
   @Get(':id/statistics')

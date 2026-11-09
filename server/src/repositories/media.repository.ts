@@ -57,6 +57,18 @@ type ProgressEvent = {
   percent?: number;
 };
 
+export type ImageTile = { x: number; y: number; width: number; height: number; buffer: Buffer };
+
+/** start offsets of overlapping tiles of `size` covering `length` */
+const tileOffsets = (length: number, size: number, overlap = 0.25) => {
+  if (length <= size) {
+    return [0];
+  }
+  const count = Math.ceil((length - size) / (size * (1 - overlap))) + 1;
+  const step = (length - size) / (count - 1);
+  return Array.from({ length: count }, (_, i) => Math.round(i * step));
+};
+
 export type ExtractResult = {
   buffer: Buffer;
   format: RawExtractedFormat;
@@ -73,10 +85,35 @@ export class MediaRepository {
   }
 
   /**
-  
-  @param input file path to the input image
-  @returns ExtractResult if succeeded, or null if failed
-  */
+   * Splits an image into overlapping square tiles at full resolution, so small faces stay large enough for
+   * face detection (which scales its input down to 640 px). The whole image comes first, for large faces.
+   * `tileSize` 0 returns only the whole image.
+   */
+  async getImageTiles(input: Buffer, tileSize: number): Promise<{ width: number; height: number; tiles: ImageTile[] }> {
+    const image = sharp(input, { failOn: 'none' }).rotate();
+    const { data, info } = await image.jpeg({ quality: 95 }).toBuffer({ resolveWithObject: true });
+    const { width, height } = info;
+    const tiles: ImageTile[] = [{ x: 0, y: 0, width, height, buffer: data }];
+    if (tileSize > 0 && (width > tileSize * 1.25 || height > tileSize * 1.25)) {
+      const size = Math.min(tileSize, width, height);
+      for (const y of tileOffsets(height, size)) {
+        for (const x of tileOffsets(width, size)) {
+          const buffer = await sharp(data)
+            .extract({ left: x, top: y, width: size, height: size })
+            .jpeg({ quality: 95 })
+            .toBuffer();
+          tiles.push({ x, y, width: size, height: size, buffer });
+        }
+      }
+    }
+    return { width, height, tiles };
+  }
+
+  /**
+   *
+   * @param input file path to the input image
+   * @returns ExtractResult if succeeded, or null if failed
+   */
   async extract(input: string): Promise<ExtractResult | null> {
     for (const { tag, format } of [
       { tag: 'JpgFromRaw2', format: RawExtractedFormat.Jpeg },

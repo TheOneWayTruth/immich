@@ -113,6 +113,19 @@ export interface MergeSuggestionFace {
   boundingBoxY2: number;
 }
 
+export interface PersonFace {
+  id: string;
+  assetId: string;
+  imageWidth: number;
+  imageHeight: number;
+  boundingBoxX1: number;
+  boundingBoxY1: number;
+  boundingBoxX2: number;
+  boundingBoxY2: number;
+  takenAt: Date;
+  similarity: number | null;
+}
+
 export type UnassignFacesOptions = DeleteFacesOptions & { clusterGroupId?: string };
 
 export type GetFacesOptions = WithPersonOptions & { isVisible?: boolean };
@@ -1123,6 +1136,38 @@ export class PersonRepository {
       from unnest(${pairs.map(([a]) => a)}::uuid[], ${pairs.map(([, b]) => b)}::uuid[]) as pair("personGroupId", "otherPersonGroupId")
       on conflict do nothing
     `.execute(this.db);
+  }
+
+  /**
+   * every face of a person on the user's own timeline and archive, oldest photo first,
+   * with each face's similarity to the person's average face
+   */
+  @GenerateSql({ params: [DummyValue.UUID, DummyValue.UUID] })
+  async getPersonFaces(ownerId: string, personGroupId: string) {
+    const { rows } = await sql<PersonFace>`
+      with "faces" as (
+        select f."id", f."assetId", f."imageWidth", f."imageHeight",
+          f."boundingBoxX1", f."boundingBoxY1", f."boundingBoxX2", f."boundingBoxY2",
+          a."localDateTime" as "takenAt", s."embedding"
+        from "asset_face" f
+        inner join "asset" a on a."id" = f."assetId"
+        left join "face_search" s on s."faceId" = f."id"
+        where f."personGroupId" = ${personGroupId}
+          and f."ownerId" = ${ownerId}
+          and f."deletedAt" is null
+          and f."isVisible" is true
+          and f."assetVisibility" in (${sql.lit(AssetVisibility.Timeline)}, ${sql.lit(AssetVisibility.Archive)})
+          and f."assetDeletedAt" is null
+          and f."imageWidth" > 0
+      ), "centroid" as (
+        select l2_normalize(avg("embedding")) as "centroid" from "faces"
+      )
+      select "id", "assetId", "imageWidth", "imageHeight", "boundingBoxX1", "boundingBoxY1", "boundingBoxX2", "boundingBoxY2",
+        "takenAt", 1 - ("embedding" <=> "centroid") as "similarity"
+      from "faces", "centroid"
+      order by "takenAt", "id"
+    `.execute(this.db);
+    return rows;
   }
 
   /**

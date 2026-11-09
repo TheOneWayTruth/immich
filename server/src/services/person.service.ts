@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Insertable } from 'kysely';
 import { isUndefined, omitBy } from 'lodash-es';
+import type { MediaRepository } from 'src/repositories/media.repository.js';
 import { Chunked, OnEvent, OnJob } from 'src/decorators.js';
 import { BulkIdErrorReason, BulkIdResponseDto } from 'src/dtos/asset-ids.response.dto.js';
 import { AuthDto } from 'src/dtos/auth.dto.js';
@@ -17,6 +18,11 @@ import {
   PeopleUsersUpsertDto,
   PersonCreateDto,
   PersonDeleteDto,
+  PersonFacesResponseDto,
+  PersonMatchEmbeddingsDto,
+  PersonMatchEmbeddingsResponseDto,
+  PersonMatchImageDto,
+  PersonMatchImageResponseDto,
   PersonMergeSuggestionDismissDto,
   PersonMergeSuggestionSearchDto,
   PersonMergeSuggestionsResponseDto,
@@ -59,6 +65,8 @@ import { isHttpException } from 'src/utils/logger.js';
 import { mimeTypes } from 'src/utils/mime-types.js';
 import { batched, findOrFail, hasSomeDefined, isFacialRecognitionEnabled } from 'src/utils/misc.js';
 import { Point, transformPoints } from 'src/utils/transform.js';
+
+const boxArea = (b: BoundingBox) => Math.max(0, b.x2 - b.x1) * Math.max(0, b.y2 - b.y1);
 
 const personKey = ({ ownerId, personGroupId }: PersonId) => `${ownerId}/${personGroupId}`;
 
@@ -400,6 +408,172 @@ export class PersonService extends BaseService {
       repository: this.partnerRepository,
     });
     return this.personRepository.getStatistics(personGroupId, { ownerId: auth.user.id, partnerIds });
+  }
+
+  async getPersonFaces(auth: AuthDto, personGroupId: string): Promise<PersonFacesResponseDto> {
+    await this.requirePersonAccess({
+      auth,
+      permission: Permission.PersonRead,
+      ids: [{ personGroupId, ownerId: auth.user.id }],
+    });
+
+    const faces = await this.personRepository.getPersonFaces(auth.user.id, personGroupId);
+    return {
+      faces: faces.map(({ takenAt, similarity, ...face }) => ({
+        ...face,
+        takenAt: new Date(takenAt).toISOString(),
+        similarity: similarity === null ? null : Number(similarity),
+      })),
+    };
+  }
+
+  async matchImage(
+    auth: AuthDto,
+    file: Express.Multer.File | undefined,
+    { minScore, maxDistance, tileSize, numMatches, withEmbedding }: PersonMatchImageDto,
+  ): Promise<PersonMatchImageResponseDto> {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Send the image in the form field "file"');
+    }
+    const { machineLearning } = await this.getConfig({ withCache: true });
+    if (!isFacialRecognitionEnabled(machineLearning)) {
+      throw new BadRequestException('Facial recognition is disabled');
+    }
+    const user = await findOrFail(() => this.userRepository.get(auth.user.id, {}), 'User');
+
+    let tiled: Awaited<ReturnType<MediaRepository['getImageTiles']>>;
+    try {
+      tiled = await this.mediaRepository.getImageTiles(file.buffer, tileSize);
+    } catch {
+      throw new BadRequestException('The file is not a readable image');
+    }
+
+    const options = {
+      ...machineLearning.facialRecognition,
+      minScore: minScore ?? machineLearning.facialRecognition.minScore,
+    };
+    const perTile = await Promise.all(
+      tiled.tiles.map(async (tile) => {
+        const { imageWidth, imageHeight, faces } = await this.machineLearningRepository.detectFaces(
+          tile.buffer,
+          options,
+        );
+        const sx = tile.width / (imageWidth || tile.width);
+        const sy = tile.height / (imageHeight || tile.height);
+        return faces.map(({ boundingBox: b, embedding, score }) => ({
+          box: { x1: tile.x + b.x1 * sx, y1: tile.y + b.y1 * sy, x2: tile.x + b.x2 * sx, y2: tile.y + b.y2 * sy },
+          embedding,
+          score,
+        }));
+      }),
+    );
+    const detected = perTile.flat();
+
+    // the same face is found in the whole image and in overlapping tiles (or cut off at a tile edge): keep the best one
+    const kept: typeof detected = [];
+    for (const face of [...detected].sort((a, b) => b.score - a.score)) {
+      const duplicate = kept.some((k) => {
+        const overlap = boxArea({
+          x1: Math.max(k.box.x1, face.box.x1),
+          y1: Math.max(k.box.y1, face.box.y1),
+          x2: Math.min(k.box.x2, face.box.x2),
+          y2: Math.min(k.box.y2, face.box.y2),
+        });
+        return overlap > 0.5 * Math.min(boxArea(k.box), boxArea(face.box));
+      });
+      if (!duplicate) {
+        kept.push(face);
+      }
+    }
+
+    const matches = await this.matchEmbeddings(
+      auth.user.id,
+      user.clusterGroupId,
+      kept.map(({ embedding }) => embedding),
+      maxDistance,
+      numMatches,
+    );
+
+    return {
+      imageWidth: tiled.width,
+      imageHeight: tiled.height,
+      faces: kept.map(({ box, score, embedding }, i) => ({
+        boundingBox: {
+          x1: Math.round(box.x1),
+          y1: Math.round(box.y1),
+          x2: Math.round(box.x2),
+          y2: Math.round(box.y2),
+        },
+        score,
+        ...(withEmbedding && { embedding: JSON.parse(embedding) as number[] }),
+        matches: matches[i],
+      })),
+    };
+  }
+
+  async matchFaceEmbeddings(
+    auth: AuthDto,
+    { embeddings, maxDistance, numMatches }: PersonMatchEmbeddingsDto,
+  ): Promise<PersonMatchEmbeddingsResponseDto> {
+    const user = await findOrFail(() => this.userRepository.get(auth.user.id, {}), 'User');
+    const matches = await this.matchEmbeddings(
+      auth.user.id,
+      user.clusterGroupId,
+      embeddings.map((embedding) => JSON.stringify(embedding)),
+      maxDistance,
+      numMatches,
+    );
+    return { results: matches.map((m) => ({ matches: m })) };
+  }
+
+  /** closest people (of `ownerId`) for each embedding, best first */
+  private async matchEmbeddings(
+    ownerId: string,
+    clusterGroupId: string,
+    embeddings: string[],
+    maxDistance: number,
+    numMatches: number,
+  ) {
+    const candidates = await Promise.all(
+      embeddings.map(async (embedding) => {
+        const results = await this.searchRepository.searchFaces({
+          clusterGroupId,
+          embedding,
+          numResults: 50,
+          maxDistance,
+          hasPerson: true,
+        });
+        const byPerson = new Map<string, { distance: number; faceCount: number }>();
+        for (const { personGroupId, distance } of results) {
+          if (!personGroupId) {
+            continue;
+          }
+          const entry = byPerson.get(personGroupId);
+          if (entry) {
+            entry.faceCount++;
+          } else {
+            byPerson.set(personGroupId, { distance, faceCount: 1 });
+          }
+        }
+        return [...byPerson].slice(0, numMatches);
+      }),
+    );
+
+    const personIds = [...new Set(candidates.flatMap((list) => list.map(([id]) => id)))];
+    const people = personIds.length > 0 ? await this.personRepository.getByGroupIds(ownerId, personIds) : [];
+    const peopleById = new Map(people.map((person) => [person.personGroupId, person]));
+
+    return candidates.map((list) =>
+      list
+        .filter(([id]) => peopleById.has(id))
+        .map(([id, { distance, faceCount }]) => ({
+          personId: id,
+          name: peopleById.get(id)!.name,
+          isHidden: peopleById.get(id)!.isHidden,
+          distance,
+          faceCount,
+        })),
+    );
   }
 
   async getThumbnail(auth: AuthDto, personGroupId: string): Promise<ImmichFileResponse> {

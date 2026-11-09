@@ -50,6 +50,7 @@
     mdiAccountMultipleCheckOutline,
     mdiArrowLeft,
     mdiDotsVertical,
+    mdiFaceRecognition,
     mdiPencilOutline,
   } from '@mdi/js';
   import { DateTime } from 'luxon';
@@ -332,6 +333,12 @@
   };
 
   const personActionsEnabled = $derived(!assetViewerManager.isViewing && !assetMultiSelectManager.selectionActive);
+
+  const SortFaces: ActionItem = {
+    title: $t('sort_faces'),
+    icon: mdiFaceRecognition,
+    onAction: () => goto(Route.sortPersonFaces(person)),
+  };
 </script>
 
 <OnEvents
@@ -528,7 +535,7 @@
         {#snippet trailing()}
           <ActionButton action={Access} />
           <ContextMenuButton
-            items={[SelectFeaturePhoto, Edit, HidePerson, ShowPerson, Merge, Favorite, Unfavorite]}
+            items={[SelectFeaturePhoto, Edit, HidePerson, ShowPerson, Merge, SortFaces, Favorite, Unfavorite]}
             aria-label={$t('open')}
           />
         {/snippet}

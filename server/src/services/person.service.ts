@@ -1128,6 +1128,10 @@ export class PersonService extends BaseService {
       }
     }
 
+    // merged people keep their place in the family tree, before their emptied groups are deleted
+    if (targetId) {
+      await this.personRepository.moveFamilyTree(sourceIds, targetId);
+    }
     await this.personRepository.deleteEmptyGroups();
 
     for (const ownerId of ownerIds) {

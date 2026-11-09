@@ -3,24 +3,21 @@ import type { Translations } from 'svelte-i18n';
 export type FamilyGender = 'female' | 'male';
 /** what `member` is to `other` */
 export type FamilyRelation = 'parent' | 'child' | 'sibling' | 'partner';
-export type FamilyLinkType = 'parent' | 'partner';
+/** a sibling link only joins siblings that share no known parent */
+export type FamilyLinkType = 'parent' | 'partner' | 'sibling';
 
+/** every member is a person; the id is the person id */
 export type FamilyMember = {
   id: string;
-  personId: string | null;
   name: string;
   gender: FamilyGender | null;
   birthDate: string | null;
-  isPlaceholder: boolean;
-  isMe: boolean;
 };
 
 /** parent links point from the parent to the child */
 export type FamilyLink = { type: FamilyLinkType; fromId: string; toId: string };
 
 export type FamilyTreeResponse = { members: FamilyMember[]; links: FamilyLink[]; memberId?: string };
-
-export type FamilyMemberRef = { memberId?: string; personId?: string; name?: string };
 
 const api = async (path: string, init?: { method: string; body?: unknown }): Promise<FamilyTreeResponse> => {
   const response = await fetch(`/api/family${path}`, {
@@ -37,19 +34,12 @@ const api = async (path: string, init?: { method: string; body?: unknown }): Pro
 
 export const familyApi = {
   get: () => api(''),
-  addMember: (body: { personId?: string; name?: string; gender?: FamilyGender | null }) =>
-    api('/members', { method: 'POST', body }),
-  updateMember: (
-    id: string,
-    body: { name?: string; gender?: FamilyGender | null; personId?: string | null; isMe?: boolean },
-  ) => api(`/members/${id}`, { method: 'PATCH', body }),
+  addMember: (body: { personId: string; gender?: FamilyGender | null }) => api('/members', { method: 'POST', body }),
+  setGender: (id: string, gender: FamilyGender | null) => api(`/members/${id}`, { method: 'PATCH', body: { gender } }),
   deleteMember: (id: string) => api(`/members/${id}`, { method: 'DELETE' }),
-  addRelation: (body: {
-    member: FamilyMemberRef;
-    relation: FamilyRelation;
-    other: FamilyMemberRef;
-    gender?: FamilyGender;
-  }) => api('/relations', { method: 'POST', body }),
+  /** personId is the relative (added to the tree if needed), otherId someone in the tree */
+  addRelation: (body: { personId: string; relation: FamilyRelation; otherId: string; gender?: FamilyGender }) =>
+    api('/relations', { method: 'POST', body }),
   removeLink: (link: FamilyLink) => api('/relations/remove', { method: 'POST', body: link }),
 };
 
@@ -69,6 +59,12 @@ export class FamilyGraph {
   private readonly parents = new Map<string, string[]>();
   private readonly children = new Map<string, string[]>();
   private readonly partners = new Map<string, string[]>();
+  private readonly linkedSiblings = new Map<string, string[]>();
+  /**
+   * parents for working out blood relations: siblings joined by a sibling link share an unknown parent,
+   * which only exists here (a key that is no member id), so their children are cousins and so on
+   */
+  private readonly bloodParents = new Map<string, string[]>();
   private readonly ancestorCache = new Map<string, Map<string, number>>();
 
   constructor(
@@ -80,6 +76,7 @@ export class FamilyGraph {
       this.parents.set(member.id, []);
       this.children.set(member.id, []);
       this.partners.set(member.id, []);
+      this.linkedSiblings.set(member.id, []);
     }
     for (const { type, fromId, toId } of links) {
       if (!this.members.has(fromId) || !this.members.has(toId)) {
@@ -89,17 +86,15 @@ export class FamilyGraph {
         this.parents.get(toId)!.push(fromId);
         this.children.get(fromId)!.push(toId);
       } else {
-        this.partners.get(fromId)!.push(toId);
-        this.partners.get(toId)!.push(fromId);
+        const map = type === 'partner' ? this.partners : this.linkedSiblings;
+        map.get(fromId)!.push(toId);
+        map.get(toId)!.push(fromId);
       }
     }
-  }
-
-  get me() {
-    for (const member of this.members.values()) {
-      if (member.isMe) {
-        return member;
-      }
+    for (const id of this.members.keys()) {
+      const group = this.siblingGroup(id);
+      const unknownParent = group.length > 1 ? [`siblings:${group.sort()[0]}`] : [];
+      this.bloodParents.set(id, [...this.parentsOf(id), ...unknownParent]);
     }
   }
 
@@ -128,15 +123,35 @@ export class FamilyGraph {
     return [...coParents];
   }
 
-  siblingsOf(id: string) {
-    const siblings = new Set<string>();
-    for (const parentId of this.parentsOf(id)) {
-      for (const childId of this.childrenOf(parentId)) {
-        if (childId !== id) {
-          siblings.add(childId);
+  /** siblings joined directly by a sibling link */
+  linkedSiblingsOf(id: string) {
+    return this.linkedSiblings.get(id) ?? [];
+  }
+
+  /** the member and everyone joined to them by sibling links, directly or through others */
+  siblingGroup(id: string) {
+    const group = new Set([id]);
+    const queue = [id];
+    while (queue.length > 0) {
+      for (const other of this.linkedSiblingsOf(queue.shift()!)) {
+        if (!group.has(other)) {
+          group.add(other);
+          queue.push(other);
         }
       }
     }
+    return [...group];
+  }
+
+  /** everyone with a shared parent or joined by sibling links */
+  siblingsOf(id: string) {
+    const siblings = new Set<string>(this.siblingGroup(id));
+    for (const parentId of this.parentsOf(id)) {
+      for (const childId of this.childrenOf(parentId)) {
+        siblings.add(childId);
+      }
+    }
+    siblings.delete(id);
     return [...siblings];
   }
 
@@ -151,7 +166,7 @@ export class FamilyGraph {
     while (queue.length > 0) {
       const current = queue.shift()!;
       const depth = result.get(current)! + 1;
-      for (const parentId of this.parentsOf(current)) {
+      for (const parentId of this.bloodParents.get(current) ?? []) {
         if (result.has(parentId)) {
           continue;
         }
@@ -312,7 +327,7 @@ export class FamilyGraph {
 }
 
 export type FamilyLayoutNode = { id: string; x: number; y: number };
-export type FamilyLayoutLine = { points: Array<[number, number]>; kind: 'child' | 'partner' };
+export type FamilyLayoutLine = { points: Array<[number, number]>; kind: 'child' | 'partner' | 'sibling' };
 export type FamilyLayout = { nodes: FamilyLayoutNode[]; lines: FamilyLayoutLine[]; width: number; height: number };
 
 /** gapX is between members of one family, familyGap between different families */
@@ -340,6 +355,7 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
         ...graph.parentsOf(id).map((other): [string, number] => [other, gen - 1]),
         ...graph.childrenOf(id).map((other): [string, number] => [other, gen + 1]),
         ...graph.partnersOf(id).map((other): [string, number] => [other, gen]),
+        ...graph.linkedSiblingsOf(id).map((other): [string, number] => [other, gen]),
       ];
       for (const [other, otherGen] of next) {
         if (generation.has(other)) {
@@ -381,10 +397,14 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
     rows[index] ??= [];
   }
 
-  /** members with the same parents (or the same partner's parents) belong to one family */
+  /** members with the same parents (or the same partner's parents, or joined as siblings) belong to one family */
   const familyOf = (unit: string[]) => {
     const withParents = unit.find((id) => graph.parentsOf(id).length > 0);
-    return withParents ? [...graph.parentsOf(withParents)].sort().join(',') : `own:${unit[0]}`;
+    if (withParents) {
+      return [...graph.parentsOf(withParents)].sort().join(',');
+    }
+    const withSiblings = unit.find((id) => graph.linkedSiblingsOf(id).length > 0);
+    return withSiblings ? `siblings:${graph.siblingGroup(withSiblings).sort()[0]}` : `own:${unit[0]}`;
   };
 
   const x = new Map<string, number>();
@@ -452,6 +472,9 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
     for (const row of rows.slice(1)) {
       placeRow(row, (id) => average(graph.parentsOf(id)) ?? x.get(id));
     }
+    for (const row of rows) {
+      placeRow(row, (id) => (graph.parentsOf(id).length > 0 ? x.get(id) : (average(graph.siblingGroup(id)) ?? x.get(id))));
+    }
     for (const row of rows.slice(0, -1).reverse()) {
       placeRow(row, (id) => average(graph.childrenOf(id)) ?? x.get(id));
     }
@@ -494,6 +517,37 @@ export const layoutFamily = (graph: FamilyGraph): FamilyLayout => {
     family.children.push(id);
     families.set(key, family);
   }
+  // siblings without a known parent get a line above them that joins them
+  const siblingBrackets = new Map<string, string[]>();
+  for (const id of graph.members.keys()) {
+    const group = graph.siblingGroup(id);
+    if (group.length > 1) {
+      siblingBrackets.set(group.sort()[0], group);
+    }
+  }
+  for (const group of siblingBrackets.values()) {
+    const groupNodes = group.map((id) => position.get(id)!);
+    const top = Math.min(...groupNodes.map((node) => node.y)) - height / 2;
+    const busY = top - gapY / 3;
+    const xs = groupNodes.map((node) => node.x);
+    lines.push({
+      kind: 'sibling',
+      points: [
+        [Math.min(...xs), busY],
+        [Math.max(...xs), busY],
+      ],
+    });
+    for (const node of groupNodes) {
+      lines.push({
+        kind: 'sibling',
+        points: [
+          [node.x, busY],
+          [node.x, node.y - height / 2],
+        ],
+      });
+    }
+  }
+
   // families whose lines would overlap get their horizontal line at different heights
   const LEVELS = [0, -16, 16, -32, 32];
   const levelEnds = new Map<number, number[]>();

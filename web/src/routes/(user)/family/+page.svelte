@@ -18,14 +18,12 @@
   } from '$lib/utils/family';
   import { handleError } from '$lib/utils/handle-error';
   import { getPerson } from '@immich/sdk';
-  import { Button, Field, IconButton, Input, LoadingSpinner, Switch, Text, modalManager } from '@immich/ui';
+  import { Button, Field, IconButton, LoadingSpinner, Text, modalManager } from '@immich/ui';
   import {
     mdiAccountMultiplePlusOutline,
     mdiAccountPlusOutline,
     mdiClose,
     mdiImageMultipleOutline,
-    mdiLinkVariant,
-    mdiLinkVariantOff,
     mdiTrashCanOutline,
   } from '@mdi/js';
   import { onMount, tick } from 'svelte';
@@ -42,13 +40,13 @@
   let selectedId = $state<string>();
   let missingPerson = $state<{ id: string; name: string }>();
   let busy = $state(false);
-  let nameDraft = $state('');
   let panZoom = $state<FamilyPanZoom>();
 
   const graph = $derived(new FamilyGraph(tree?.members ?? [], tree?.links ?? []));
   const layout = $derived(layoutFamily(graph));
   const selected = $derived(selectedId ? graph.members.get(selectedId) : undefined);
-  const focusId = $derived(selected?.id ?? graph.me?.id);
+  // relationships are named from the selected person's point of view
+  const focusId = $derived(selected?.id);
 
   const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
   const label = (relation: FamilyRelationLabel) => $t(relation.key, { values: relation.values });
@@ -85,7 +83,6 @@
   /** center moves the selected member into view, e.g. when picked from the list instead of the map */
   const select = async (id: string | undefined, { center = true } = {}) => {
     selectedId = id;
-    nameDraft = id ? (graph.members.get(id)?.name ?? '') : '';
     await tick();
     const node = id ? layout.nodes.find((item) => item.id === id) : undefined;
     if (center && node) {
@@ -139,17 +136,14 @@
     await tick();
     panZoom?.fit();
     if (data.personId) {
-      const member = tree.members.find(({ personId }) => personId === data.personId);
-      if (member) {
-        await select(member.id);
+      if (graph.members.has(data.personId)) {
+        await select(data.personId);
       } else {
         const person = await getPerson({ id: data.personId }).catch(() => undefined);
         if (person) {
           missingPerson = { id: person.id, name: person.name || $t('family_unknown_person') };
         }
       }
-    } else if (graph.me) {
-      await select(graph.me.id);
     }
   });
 
@@ -158,10 +152,9 @@
       title: $t('family_add_person'),
       graph,
       nameOf,
-      withMembers: false,
     });
     if (pick) {
-      await run(() => familyApi.addMember({ personId: pick.personId, name: pick.name, gender: pick.gender }));
+      await run(() => familyApi.addMember({ personId: pick.personId, gender: pick.gender }));
     }
   };
 
@@ -179,29 +172,6 @@
       if (result) {
         await run(() => Promise.resolve(result));
       }
-    }
-  };
-
-  const linkPerson = async () => {
-    if (!selectedId) {
-      return;
-    }
-    const id = selectedId;
-    const pick = await modalManager.show(FamilyPickModal, {
-      title: $t('family_link_person'),
-      graph,
-      nameOf,
-      peopleOnly: true,
-    });
-    if (pick?.personId) {
-      await run(() => familyApi.updateMember(id, { personId: pick.personId }));
-    }
-  };
-
-  const saveName = async () => {
-    if (selected && !selected.personId && nameDraft.trim() !== selected.name) {
-      const id = selected.id;
-      await run(() => familyApi.updateMember(id, { name: nameDraft.trim() }));
     }
   };
 
@@ -225,6 +195,7 @@
       return [];
     }
     const id = selected.id;
+    const linkedSiblings = graph.linkedSiblingsOf(id);
     const rows: Array<{ id: string; link?: FamilyLink }> = [
       ...graph
         .parentsOf(id)
@@ -232,7 +203,10 @@
       ...graph
         .partnersOf(id)
         .map((other) => ({ id: other, link: { type: 'partner', fromId: id, toId: other } as const })),
-      ...graph.siblingsOf(id).map((other) => ({ id: other })),
+      ...graph.siblingsOf(id).map((other) => ({
+        id: other,
+        link: linkedSiblings.includes(other) ? ({ type: 'sibling', fromId: id, toId: other } as const) : undefined,
+      })),
       ...graph
         .childrenOf(id)
         .map((other) => ({ id: other, link: { type: 'parent', fromId: id, toId: other } as const })),
@@ -279,6 +253,7 @@
                   points={line.points.map(([x, y]) => `${x},${y}`).join(' ')}
                   fill="none"
                   class={line.kind === 'partner' ? 'stroke-primary/60' : 'stroke-gray-400 dark:stroke-gray-500'}
+                  stroke-dasharray={line.kind === 'sibling' ? '5 4' : undefined}
                   stroke-width={line.kind === 'partner' ? 3 : 1.5}
                 />
               {/each}
@@ -293,20 +268,18 @@
                 class="absolute flex flex-col items-center gap-1 rounded-2xl border bg-light p-2 text-center shadow-sm transition-colors hover:border-primary {node.id ===
                 selectedId
                   ? 'border-primary ring-2 ring-primary'
-                  : 'border-gray-200 dark:border-gray-700'} {member.isPlaceholder ? 'border-dashed opacity-80' : ''}"
+                  : 'border-gray-200 dark:border-gray-700'}"
                 style:left="{node.x - FAMILY_CARD.width / 2}px"
                 style:top="{node.y - FAMILY_CARD.height / 2}px"
                 style:width="{FAMILY_CARD.width}px"
                 style:height="{FAMILY_CARD.height}px"
                 onclick={() => select(node.id, { center: false })}
               >
-                <FamilyAvatar personId={member.personId} name={member.name} size="4.5rem" />
+                <FamilyAvatar personId={member.id} name={member.name} size="4.5rem" />
                 <span class="line-clamp-2 text-sm/tight font-medium {member.name ? '' : 'text-gray-500 italic'}">
                   {nameOf(node.id)}
                 </span>
-                {#if member.isMe}
-                  <span class="text-xs font-semibold text-primary">{$t('family_this_is_me')}</span>
-                {:else if relation}
+                {#if relation}
                   <span class="line-clamp-2 text-xs/tight text-primary">{relation}</span>
                 {/if}
               </button>
@@ -345,14 +318,9 @@
         class="flex shrink-0 flex-col gap-4 overflow-y-auto border-t p-4 lg:w-96 lg:border-s lg:border-t-0 dark:border-gray-700"
       >
         <div class="flex items-start gap-3">
-          <FamilyAvatar personId={selected.personId} name={selected.name} size="4rem" />
+          <FamilyAvatar personId={id} name={selected.name} size="4rem" />
           <div class="min-w-0 grow">
             <h2 class="text-lg font-semibold wrap-break-word">{nameOf(id)}</h2>
-            {#if graph.me && graph.me.id !== id && relationTo(id, graph.me.id)}
-              <Text size="small" class="text-primary">
-                {capitalize($t('family_relation_to_you', { values: { relation: relationTo(id, graph.me.id) } }))}
-              </Text>
-            {/if}
           </div>
           <IconButton
             icon={mdiClose}
@@ -365,16 +333,6 @@
           />
         </div>
 
-        {#if !selected.personId}
-          <Field label={$t('name')}>
-            <Input
-              bind:value={nameDraft}
-              onblur={saveName}
-              onkeydown={(event: KeyboardEvent) => event.key === 'Enter' && saveName()}
-            />
-          </Field>
-        {/if}
-
         <Field label={$t('family_gender')}>
           <div class="flex gap-2">
             {#each genderOptions as option (option.value)}
@@ -382,7 +340,7 @@
                 size="small"
                 variant={selected.gender === option.value ? 'filled' : 'outline'}
                 color={selected.gender === option.value ? 'primary' : 'secondary'}
-                onclick={() => run(() => familyApi.updateMember(id, { gender: option.value }))}
+                onclick={() => run(() => familyApi.setGender(id, option.value))}
               >
                 {option.label}
               </Button>
@@ -390,39 +348,19 @@
           </div>
         </Field>
 
-        <label class="flex items-center justify-between gap-2">
-          <Text>{$t('family_this_is_me')}</Text>
-          <Switch checked={selected.isMe} onCheckedChange={(isMe) => run(() => familyApi.updateMember(id, { isMe }))} />
-        </label>
-
         <div class="flex flex-wrap gap-2">
           <Button size="small" leadingIcon={mdiAccountMultiplePlusOutline} onclick={addRelative} disabled={busy}>
             {$t('family_add_relative')}
           </Button>
-          {#if selected.personId}
-            <Button
-              size="small"
-              variant="ghost"
-              color="secondary"
-              leadingIcon={mdiImageMultipleOutline}
-              onclick={() => goto(Route.viewPerson({ id: selected.personId! }, { previousRoute: Route.family() }))}
-            >
-              {$t('family_open_photos')}
-            </Button>
-            <Button
-              size="small"
-              variant="ghost"
-              color="secondary"
-              leadingIcon={mdiLinkVariantOff}
-              onclick={() => run(() => familyApi.updateMember(id, { personId: null }))}
-            >
-              {$t('family_unlink_person')}
-            </Button>
-          {:else}
-            <Button size="small" variant="ghost" color="secondary" leadingIcon={mdiLinkVariant} onclick={linkPerson}>
-              {$t('family_link_person')}
-            </Button>
-          {/if}
+          <Button
+            size="small"
+            variant="ghost"
+            color="secondary"
+            leadingIcon={mdiImageMultipleOutline}
+            onclick={() => goto(Route.viewPerson({ id }, { previousRoute: Route.family() }))}
+          >
+            {$t('family_open_photos')}
+          </Button>
         </div>
 
         {#if relatives.length > 0}
@@ -435,11 +373,7 @@
                   class="flex min-w-0 grow items-center gap-3 rounded-xl px-2 py-1.5 text-start hover:bg-gray-100 dark:hover:bg-gray-800"
                   onclick={() => select(relative.id)}
                 >
-                  <FamilyAvatar
-                    personId={graph.members.get(relative.id)?.personId}
-                    name={graph.members.get(relative.id)?.name ?? ''}
-                    size="2.25rem"
-                  />
+                  <FamilyAvatar personId={relative.id} name={graph.members.get(relative.id)?.name ?? ''} size="2.25rem" />
                   <div class="min-w-0">
                     <Text class="truncate">{nameOf(relative.id)}</Text>
                     <Text size="tiny" class="truncate text-primary">{relationTo(relative.id, id)}</Text>

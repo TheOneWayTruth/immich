@@ -4,7 +4,6 @@ import {
   FamilyLinkDto,
   FamilyLinkType,
   FamilyMemberCreateDto,
-  FamilyMemberRef,
   FamilyMemberUpdateDto,
   FamilyRelation,
   FamilyRelationCreateDto,
@@ -23,6 +22,10 @@ class Tree {
     this.members = new Map(members.map((member) => [member.id, member]));
   }
 
+  has(id: string) {
+    return this.members.has(id);
+  }
+
   parentsOf(id: string) {
     return this.links
       .filter((link) => link.type === FamilyLinkType.Parent && link.toId === id)
@@ -33,6 +36,28 @@ class Tree {
     return this.links
       .filter((link) => link.type === FamilyLinkType.Parent && link.fromId === id)
       .map((link) => link.toId);
+  }
+
+  /** members joined by sibling links only, without a known shared parent */
+  linkedSiblingsOf(id: string) {
+    return this.links
+      .filter((link) => link.type === FamilyLinkType.Sibling && (link.fromId === id || link.toId === id))
+      .map((link) => (link.fromId === id ? link.toId : link.fromId));
+  }
+
+  /** the member and everyone joined to them by sibling links, directly or through others */
+  siblingGroup(id: string) {
+    const group = new Set([id]);
+    const queue = [id];
+    while (queue.length > 0) {
+      for (const other of this.linkedSiblingsOf(queue.shift()!)) {
+        if (!group.has(other)) {
+          group.add(other);
+          queue.push(other);
+        }
+      }
+    }
+    return [...group];
   }
 
   isAncestor(ancestorId: string, id: string): boolean {
@@ -52,11 +77,10 @@ class Tree {
     }
     return false;
   }
-
-  isPlaceholder(id: string) {
-    return this.members.get(id)?.isPlaceholder ?? false;
-  }
 }
+
+/** every pair of ids, each pair once */
+const pairs = (ids: string[]) => ids.flatMap((a, index) => ids.slice(index + 1).map((b) => [a, b] as const));
 
 @Injectable()
 export class FamilyService {
@@ -66,160 +90,111 @@ export class FamilyService {
   ) {}
 
   async getTree(auth: AuthDto, memberId?: string): Promise<FamilyTreeResponseDto> {
-    const tree = await this.load(auth.user.id);
-    const partners = new Set<string>();
-    const links = tree.links.filter((link) => {
-      if (link.type !== FamilyLinkType.Partner) {
-        return true;
-      }
-      // merging members can leave a partnership stored in both directions
-      const key = [link.fromId, link.toId].sort().join(',');
-      if (partners.has(key)) {
-        return false;
-      }
-      partners.add(key);
-      return true;
-    });
-
-    return {
-      members: tree.members
-        .values()
-        .map(({ personGroupId, ...member }) => ({
-          ...member,
-          personId: personGroupId,
-        }))
-        .toArray(),
-      links,
-      memberId,
-    };
+    const tree = await this.load(auth);
+    return { members: [...tree.members.values()], links: tree.links, memberId };
   }
 
-  async createMember(auth: AuthDto, { personId, name, gender }: FamilyMemberCreateDto) {
-    const memberId = await this.resolve(auth, await this.load(auth.user.id), { personId, name });
-    if (gender !== undefined) {
-      await this.familyRepository.updateMember(auth.user.id, memberId, { gender });
-    }
-    return this.getTree(auth, memberId);
+  async createMember(auth: AuthDto, { personId, gender }: FamilyMemberCreateDto) {
+    await this.requirePerson(auth, personId);
+    await this.familyRepository.addMember(personId, gender);
+    return this.getTree(auth, personId);
   }
 
-  async updateMember(auth: AuthDto, id: string, { name, gender, personId, isMe }: FamilyMemberUpdateDto) {
-    const ownerId = auth.user.id;
-    const tree = await this.load(ownerId);
-    const member = this.requireMember(tree, id);
-
-    if (personId) {
-      await this.requirePerson(auth, personId);
-      const other = tree.members.values().find((item) => item.personGroupId === personId);
-      if (other && other.id !== id) {
-        // the person was already in the tree under another member: they are the same, so join them
-        await this.familyRepository.updateMember(ownerId, other.id, { personGroupId: null });
-        await this.familyRepository.mergeMember(ownerId, other.id, id);
-      }
-    }
-
-    const named = (name !== undefined && name !== '') || !!personId;
-    await this.familyRepository.updateMember(ownerId, id, {
-      name,
-      gender,
-      personGroupId: personId,
-      isPlaceholder: member.isPlaceholder && named ? false : undefined,
-    });
-
-    if (isMe) {
-      await this.familyRepository.setMe(ownerId, id);
-    } else if (isMe === false && member.isMe) {
-      await this.familyRepository.setMe(ownerId, null);
-    }
-
+  async updateMember(auth: AuthDto, id: string, { gender }: FamilyMemberUpdateDto) {
+    this.requireMember(await this.load(auth), id);
+    await this.familyRepository.setGender(id, gender);
     return this.getTree(auth, id);
   }
 
   async deleteMember(auth: AuthDto, id: string) {
-    const ownerId = auth.user.id;
-    const tree = await this.load(ownerId);
+    const tree = await this.load(auth);
     this.requireMember(tree, id);
 
-    // unknown parents only exist to join siblings, so they go once they join fewer than two people
-    const placeholders = tree
-      .parentsOf(id)
-      .filter((parentId) => tree.isPlaceholder(parentId) && tree.childrenOf(parentId).length <= 2);
-    await this.familyRepository.deleteMembers(ownerId, [id, ...placeholders]);
+    // the children of this member stay siblings, and so do the siblings that were joined through them
+    const children = tree.childrenOf(id);
+    for (const [a, b] of pairs(children)) {
+      const parentsB = tree.parentsOf(b);
+      if (!tree.parentsOf(a).some((parentId) => parentId !== id && parentsB.includes(parentId))) {
+        await this.familyRepository.addLink({ type: FamilyLinkType.Sibling, fromId: a, toId: b });
+      }
+    }
+    for (const [a, b] of pairs(tree.linkedSiblingsOf(id))) {
+      await this.familyRepository.addLink({ type: FamilyLinkType.Sibling, fromId: a, toId: b });
+    }
+
+    await this.familyRepository.deleteMember(id);
     return this.getTree(auth);
   }
 
-  async addRelation(auth: AuthDto, { member, relation, other, gender }: FamilyRelationCreateDto) {
-    const ownerId = auth.user.id;
-    let tree = await this.load(ownerId);
-    const memberId = await this.resolve(auth, tree, member);
-    tree = await this.load(ownerId);
-    const otherId = await this.resolve(auth, tree, other);
-    if (memberId === otherId) {
+  async addRelation(auth: AuthDto, { personId, relation, otherId, gender }: FamilyRelationCreateDto) {
+    let tree = await this.load(auth);
+    this.requireMember(tree, otherId);
+    if (personId === otherId) {
       throw new BadRequestException('A person cannot be related to themselves');
     }
-    if (gender) {
-      await this.familyRepository.updateMember(ownerId, memberId, { gender });
+    if (!tree.has(personId)) {
+      await this.requirePerson(auth, personId);
+      await this.familyRepository.addMember(personId, gender);
+    } else if (gender) {
+      await this.familyRepository.setGender(personId, gender);
     }
 
-    tree = await this.load(ownerId);
+    tree = await this.load(auth);
     switch (relation) {
       case FamilyRelation.Parent: {
-        await this.addParent(ownerId, tree, memberId, otherId);
+        await this.addParent(tree, personId, otherId);
         break;
       }
       case FamilyRelation.Child: {
-        await this.addParent(ownerId, tree, otherId, memberId);
+        await this.addParent(tree, otherId, personId);
         break;
       }
       case FamilyRelation.Sibling: {
-        await this.addSibling(ownerId, tree, memberId, otherId);
+        await this.addSibling(tree, personId, otherId);
         break;
       }
       case FamilyRelation.Partner: {
-        const [fromId, toId] = [memberId, otherId].sort();
-        await this.familyRepository.addLink(ownerId, { type: FamilyLinkType.Partner, fromId, toId });
+        await this.familyRepository.addLink({ type: FamilyLinkType.Partner, fromId: personId, toId: otherId });
         // children that only had one of the two as parent now have both
-        await this.familyRepository.completeParents(ownerId, [
-          ...tree.childrenOf(memberId),
-          ...tree.childrenOf(otherId),
-        ]);
+        await this.familyRepository.completeParents([...tree.childrenOf(personId), ...tree.childrenOf(otherId)]);
         break;
       }
     }
 
-    return this.getTree(auth, memberId);
+    return this.getTree(auth, personId);
   }
 
   async removeLink(auth: AuthDto, link: FamilyLinkDto) {
-    await this.familyRepository.removeLink(auth.user.id, link);
+    await this.familyRepository.removeLink(link);
     return this.getTree(auth);
   }
 
-  private async addParent(ownerId: string, tree: Tree, parentId: string, childId: string) {
-    const parents = tree.parentsOf(childId);
-    if (parents.includes(parentId)) {
+  private async addParent(tree: Tree, parentId: string, childId: string) {
+    if (tree.parentsOf(childId).includes(parentId)) {
       return;
     }
-    if (parentId === childId || tree.isAncestor(childId, parentId)) {
+    if (tree.isAncestor(childId, parentId)) {
       throw new BadRequestException('This would make someone their own ancestor');
     }
-
-    // an unknown parent that joined siblings turns out to be this person
-    const placeholder = parents.find((id) => tree.isPlaceholder(id));
-    if (placeholder) {
-      await this.familyRepository.mergeMember(ownerId, placeholder, parentId);
-      await this.familyRepository.linkCoParents(ownerId, tree.childrenOf(placeholder));
-      return;
-    }
-    if (parents.length >= 2) {
+    if (tree.parentsOf(childId).length >= 2) {
       throw new BadRequestException('This person already has two parents');
     }
-    await this.familyRepository.addLink(ownerId, { type: FamilyLinkType.Parent, fromId: parentId, toId: childId });
+
+    // siblings without a known parent get this parent too
+    const children = tree
+      .siblingGroup(childId)
+      .filter(
+        (id) =>
+          id === childId ||
+          (id !== parentId && tree.parentsOf(id).length < 2 && !tree.isAncestor(id, parentId)),
+      );
+    const given = await this.giveParents(tree, children, [parentId]);
     // the child of one partner is the child of both by default, and two parents are partners by default
-    await this.familyRepository.completeParents(ownerId, [childId]);
-    await this.familyRepository.linkCoParents(ownerId, [childId]);
+    await this.familyRepository.completeParents(given);
+    await this.familyRepository.linkCoParents(given);
   }
 
-  private async addSibling(ownerId: string, tree: Tree, aId: string, bId: string) {
+  private async addSibling(tree: Tree, aId: string, bId: string) {
     const parentsA = tree.parentsOf(aId);
     const parentsB = tree.parentsOf(bId);
     if (parentsA.some((id) => parentsB.includes(id))) {
@@ -227,10 +202,8 @@ export class FamilyService {
     }
 
     if (parentsA.length === 0 && parentsB.length === 0) {
-      // siblings share parents, so when nobody knows them yet, an unknown parent joins the two
-      const parentId = await this.familyRepository.createMember(ownerId, { isPlaceholder: true });
-      await this.familyRepository.addLink(ownerId, { type: FamilyLinkType.Parent, fromId: parentId, toId: aId });
-      await this.familyRepository.addLink(ownerId, { type: FamilyLinkType.Parent, fromId: parentId, toId: bId });
+      // nobody knows their parents yet, so they are joined directly
+      await this.familyRepository.addLink({ type: FamilyLinkType.Sibling, fromId: aId, toId: bId });
       return;
     }
 
@@ -238,37 +211,9 @@ export class FamilyService {
       [aId, parentsA, parentsB],
       [bId, parentsB, parentsA],
     ] as const) {
-      if (otherParents.some((id) => id === childId || tree.isAncestor(childId, id))) {
-        throw new BadRequestException('This would make someone their own ancestor');
-      }
       if (ownParents.length === 0) {
-        for (const parentId of otherParents) {
-          await this.familyRepository.addLink(ownerId, {
-            type: FamilyLinkType.Parent,
-            fromId: parentId,
-            toId: childId,
-          });
-        }
-        return;
-      }
-      if (ownParents.length === 1 && tree.isPlaceholder(ownParents[0])) {
-        // the unknown parent of childId (and of its siblings) is otherParents[0];
-        // the siblings that unknown parent joined get the second known parent too
-        const [first, second] = otherParents;
-        const siblings = tree.childrenOf(ownParents[0]);
-        await this.familyRepository.mergeMember(ownerId, ownParents[0], first);
-        if (second) {
-          for (const siblingId of siblings) {
-            if (!tree.isAncestor(siblingId, second) && tree.parentsOf(siblingId).length < 2) {
-              await this.familyRepository.addLink(ownerId, {
-                type: FamilyLinkType.Parent,
-                fromId: second,
-                toId: siblingId,
-              });
-            }
-          }
-          await this.familyRepository.linkCoParents(ownerId, siblings);
-        }
+        // the known parents of one are the parents of the other, and of everyone joined to them as siblings
+        await this.giveParents(tree, tree.siblingGroup(childId), otherParents);
         return;
       }
     }
@@ -278,34 +223,44 @@ export class FamilyService {
     if (parents.length > 2) {
       throw new BadRequestException('They already have different parents. Add the shared parent instead.');
     }
-    for (const childId of [aId, bId]) {
-      for (const parentId of parents) {
-        await this.familyRepository.addLink(ownerId, { type: FamilyLinkType.Parent, fromId: parentId, toId: childId });
-      }
-    }
-    await this.familyRepository.linkCoParents(ownerId, [aId, bId]);
+    await this.giveParents(tree, [aId, bId], parents);
+    await this.familyRepository.linkCoParents([aId, bId]);
   }
 
-  /** finds or creates the member a reference points to */
-  private async resolve(auth: AuthDto, tree: Tree, { memberId, personId, name }: FamilyMemberRef): Promise<string> {
-    if (memberId) {
-      return this.requireMember(tree, memberId).id;
-    }
-    if (personId) {
-      const existing = tree.members.values().find((member) => member.personGroupId === personId);
-      if (existing) {
-        return existing.id;
+  /** adds the parents to the children, and drops sibling links that a shared parent now makes unnecessary */
+  private async giveParents(tree: Tree, childIds: string[], parentIds: readonly string[]) {
+    for (const childId of childIds) {
+      for (const parentId of parentIds) {
+        if (parentId === childId || tree.isAncestor(childId, parentId)) {
+          throw new BadRequestException('This would make someone their own ancestor');
+        }
       }
-      const person = await this.requirePerson(auth, personId);
-      return this.familyRepository.createMember(auth.user.id, { personGroupId: personId, name: person.name });
     }
-    return this.familyRepository.createMember(auth.user.id, { name: name ?? '' });
+    const given: string[] = [];
+    for (const childId of childIds) {
+      const current = tree.parentsOf(childId);
+      const missing = parentIds.filter((parentId) => !current.includes(parentId));
+      if (current.length + missing.length > 2) {
+        // a sibling with other known parents keeps them
+        continue;
+      }
+      for (const parentId of missing) {
+        await this.familyRepository.addLink({ type: FamilyLinkType.Parent, fromId: parentId, toId: childId });
+      }
+      given.push(childId);
+    }
+    for (const [a, b] of pairs(given)) {
+      if (tree.linkedSiblingsOf(a).includes(b)) {
+        await this.familyRepository.removeLink({ type: FamilyLinkType.Sibling, fromId: a, toId: b });
+      }
+    }
+    return given;
   }
 
   private requireMember(tree: Tree, id: string) {
     const member = tree.members.get(id);
     if (!member) {
-      throw new BadRequestException('Family member not found');
+      throw new BadRequestException('Not in the family tree');
     }
     return member;
   }
@@ -318,10 +273,10 @@ export class FamilyService {
     return person;
   }
 
-  private async load(ownerId: string) {
+  private async load(auth: AuthDto) {
     const [members, links] = await Promise.all([
-      this.familyRepository.getMembers(ownerId),
-      this.familyRepository.getLinks(ownerId),
+      this.familyRepository.getMembers(auth.user.id),
+      this.familyRepository.getLinks(),
     ]);
     return new Tree(members, links);
   }

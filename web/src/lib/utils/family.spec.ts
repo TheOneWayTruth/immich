@@ -9,15 +9,13 @@ import {
 
 const member = (id: string, gender: FamilyGender | null = null, name = id): FamilyMember => ({
   id,
-  personId: null,
   name,
   gender,
   birthDate: null,
-  isPlaceholder: false,
-  isMe: false,
 });
 const parent = (fromId: string, toId: string): FamilyLink => ({ type: 'parent', fromId, toId });
 const partner = (fromId: string, toId: string): FamilyLink => ({ type: 'partner', fromId, toId });
+const sibling = (fromId: string, toId: string): FamilyLink => ({ type: 'sibling', fromId, toId });
 
 /**
  *            grandma ── grandpa
@@ -119,14 +117,29 @@ describe('FamilyGraph.relation', () => {
     expect(half.relation('b', 'a')).toEqual({ key: 'family_rel_half_sibling', values: { gender: 'female' } });
   });
 
-  it('treats siblings joined by an unknown parent as siblings, and their children as cousins', () => {
-    const unknown = { ...member('unknown', null, ''), isPlaceholder: true };
+  it('treats siblings joined by a sibling link as siblings, and their children as cousins', () => {
     const siblings = new FamilyGraph(
-      [unknown, member('maria', 'female'), member('anna', 'female'), member('lisa', 'female')],
-      [parent('unknown', 'maria'), parent('unknown', 'anna'), parent('anna', 'lisa')],
+      [member('maria', 'female'), member('anna', 'female'), member('paul', 'male'), member('lisa', 'female')],
+      [sibling('anna', 'maria'), sibling('anna', 'paul'), parent('anna', 'lisa')],
     );
     expect(siblings.relation('maria', 'anna')?.key).toBe('family_rel_sibling');
+    // joined through anna
+    expect(siblings.relation('maria', 'paul')?.key).toBe('family_rel_sibling');
+    expect([...siblings.siblingsOf('maria')].sort()).toEqual(['anna', 'paul']);
     expect(siblings.relation('maria', 'lisa')?.key).toBe('family_rel_aunt');
+    expect(siblings.relation('lisa', 'paul')?.key).toBe('family_rel_niece');
+  });
+
+  it('puts siblings without parents in one row under a line that joins them', () => {
+    const siblings = new FamilyGraph(
+      [member('maria', 'female'), member('tom', 'male'), member('anna', 'female')],
+      [sibling('anna', 'maria'), partner('maria', 'tom')],
+    );
+    const layout = layoutFamily(siblings);
+    const node = (id: string) => layout.nodes.find((item) => item.id === id)!;
+    expect(node('maria').y).toBe(node('anna').y);
+    const bracket = layout.lines.filter(({ kind }) => kind === 'sibling');
+    expect(bracket.some(({ points: [[, y1], [, y2]] }) => y1 === y2 && y1 < node('anna').y)).toBe(true);
   });
 
   it('uses "other" when the gender is not known', () => {

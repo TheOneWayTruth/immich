@@ -9,18 +9,16 @@
     title: string;
     graph: FamilyGraph;
     nameOf: (id: string) => string;
-    peopleOnly?: boolean;
-    withMembers?: boolean;
     onClose: (pick?: FamilyPick & { gender?: FamilyGender }) => void;
   };
 
-  const { title, graph, nameOf, peopleOnly = false, withMembers = true, onClose }: Props = $props();
+  const { title, graph, nameOf, onClose }: Props = $props();
 
   let pick = $state<FamilyPick>();
   let gender = $state<FamilyGender>();
 
   // someone already in the tree keeps their gender; everyone new is a woman or a man
-  const needsGender = $derived(!peopleOnly && !pick?.memberId);
+  const needsGender = $derived(!!pick && !pick.inTree);
   const genders = $derived([
     { value: 'female' as const, label: $t('family_gender_female') },
     { value: 'male' as const, label: $t('family_gender_male') },
@@ -37,7 +35,7 @@
   disabled={!pick || (needsGender && !gender)}
 >
   <Stack gap={4}>
-    <FamilyPersonPicker {graph} {nameOf} {peopleOnly} {withMembers} bind:value={pick} />
+    <FamilyPersonPicker {graph} {nameOf} withMembers={false} bind:value={pick} />
     {#if needsGender}
       <Field label={$t('family_gender')}>
         <HStack gap={2}>

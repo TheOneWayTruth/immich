@@ -301,6 +301,64 @@ export class PersonRepository {
     await this.db.deleteFrom('person_group').where('person_group.id', 'in', ids).execute();
   }
 
+  /**
+   * Moves the family tree links of people that were merged away (their group has no person left) to the target.
+   * The family tree tables are created by the family repository on first use, so they may not exist yet.
+   */
+  async moveFamilyTree(sourceIds: string[], targetId: string): Promise<void> {
+    if (sourceIds.length === 0) {
+      return;
+    }
+
+    await this.db.transaction().execute(async (tx) => {
+      const { rows } = await sql<{ exists: boolean }>`
+        select to_regclass('family_person') is not null and to_regclass('family_relation') is not null as "exists"
+      `.execute(tx);
+      if (!rows[0]?.exists) {
+        return;
+      }
+
+      const { rows: gone } = await sql<{ id: string }>`
+        select f."personGroupId" as "id" from "family_person" f
+        where f."personGroupId" = any(${sourceIds}::uuid[])
+          and not exists (select from "person" p where p."personGroupId" = f."personGroupId")
+      `.execute(tx);
+      const goneIds = gone.map(({ id }) => id);
+      if (goneIds.length === 0) {
+        return;
+      }
+
+      await sql`
+        insert into "family_person" ("personGroupId", "gender", "createdAt")
+        select ${targetId}::uuid, f."gender", f."createdAt" from "family_person" f
+        where f."personGroupId" = any(${goneIds}::uuid[])
+        order by f."createdAt"
+        limit 1
+        on conflict ("personGroupId") do update
+          set "gender" = coalesce("family_person"."gender", excluded."gender")
+      `.execute(tx);
+      await sql`
+        with "moved" as (
+          select r."type",
+            case when r."fromId" = any(${goneIds}::uuid[]) then ${targetId}::uuid else r."fromId" end as "fromId",
+            case when r."toId" = any(${goneIds}::uuid[]) then ${targetId}::uuid else r."toId" end as "toId",
+            r."createdAt"
+          from "family_relation" r
+          where r."fromId" = any(${goneIds}::uuid[]) or r."toId" = any(${goneIds}::uuid[])
+        )
+        insert into "family_relation" ("type", "fromId", "toId", "createdAt")
+        select "type",
+          case when "type" = 'parent' then "fromId" else least("fromId", "toId") end,
+          case when "type" = 'parent' then "toId" else greatest("fromId", "toId") end,
+          "createdAt"
+        from "moved"
+        where "fromId" != "toId"
+        on conflict do nothing
+      `.execute(tx);
+      await sql`delete from "family_person" where "personGroupId" = any(${goneIds}::uuid[])`.execute(tx);
+    });
+  }
+
   @GenerateSql()
   async deleteEmptyGroups(): Promise<number> {
     const result = await this.db

@@ -1,6 +1,6 @@
 <script lang="ts" module>
-  /** a family member, a person with photos, a new person without photos (name) or an unknown person ({}) */
-  export type FamilyPick = { memberId?: string; personId?: string; name?: string; label: string };
+  /** a person, already in the family tree or not */
+  export type FamilyPick = { personId: string; label: string; inTree: boolean };
 </script>
 
 <script lang="ts">
@@ -8,7 +8,7 @@
   import type { FamilyGraph } from '$lib/utils/family';
   import { getAllPeople, searchPerson, type PersonResponseDto } from '@immich/sdk';
   import { Icon, Input, LoadingSpinner, Text } from '@immich/ui';
-  import { mdiAccountPlusOutline, mdiAccountQuestionOutline, mdiCheck } from '@mdi/js';
+  import { mdiCheck } from '@mdi/js';
   import { t } from 'svelte-i18n';
 
   type Props = {
@@ -18,8 +18,6 @@
     value?: FamilyPick;
     /** members that cannot be picked */
     exclude?: string[];
-    /** only people with photos, e.g. to link a member to a person */
-    peopleOnly?: boolean;
     /** false when only someone not yet in the tree may be picked */
     withMembers?: boolean;
     /** people with this last name are listed first, and suggested before anything is typed */
@@ -31,7 +29,6 @@
     nameOf,
     value = $bindable(),
     exclude = [],
-    peopleOnly = false,
     withMembers = true,
     surname = '',
   }: Props = $props();
@@ -42,7 +39,7 @@
   let searching = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const peopleInTree = $derived(new Set([...graph.members.values()].map((member) => member.personId)));
+  const peopleInTree = $derived(new Set(graph.members.keys()));
 
   const lastName = (name: string) => {
     const words = name.trim().toLowerCase().split(/\s+/);
@@ -63,31 +60,28 @@
       .sort((a, b) => b.rank - a.rank || a.index - b.index)
       .map(({ item }) => item);
 
-  type Entry = { key: string; pick: FamilyPick; name: string; personId: string | null; description?: string };
+  type Entry = { key: string; pick: FamilyPick; name: string; description?: string };
 
   // family members and people with photos in one list, the wanted last name first, members before people
   const entries = $derived.by(() => {
     const needle = query.trim().toLowerCase();
-    const members: Entry[] =
-      peopleOnly || !withMembers
-        ? []
-        : [...graph.members.values()]
-            .filter((member) => !exclude.includes(member.id))
-            .map((member) => ({
-              key: member.id,
-              pick: { memberId: member.id, label: nameOf(member.id) },
-              name: member.name,
-              personId: member.personId,
-              description: $t('family_tree'),
-            }))
-            .filter(({ pick }) => !needle || pick.label.toLowerCase().includes(needle));
+    const members: Entry[] = withMembers
+      ? [...graph.members.values()]
+          .filter((member) => !exclude.includes(member.id))
+          .map((member) => ({
+            key: member.id,
+            pick: { personId: member.id, label: nameOf(member.id), inTree: true },
+            name: member.name,
+            description: $t('family_tree'),
+          }))
+          .filter(({ pick }) => !needle || pick.label.toLowerCase().includes(needle))
+      : [];
     const persons: Entry[] = (needle ? people : suggested)
       .filter((person) => !peopleInTree.has(person.id))
       .map((person) => ({
         key: person.id,
-        pick: { personId: person.id, label: person.name || $t('family_unknown_person') },
+        pick: { personId: person.id, label: person.name || $t('family_unknown_person'), inTree: false },
         name: person.name,
-        personId: person.id,
       }));
     return byRank([...members, ...persons], ({ name }) => name).slice(0, needle ? 40 : 12);
   });
@@ -130,14 +124,10 @@
     value = selection;
   };
 
-  const isPicked = (selection: Partial<FamilyPick>) =>
-    !!value &&
-    value.memberId === selection.memberId &&
-    value.personId === selection.personId &&
-    (value.memberId || value.personId ? true : value.name === selection.name);
+  const isPicked = (selection: FamilyPick) => value?.personId === selection.personId;
 </script>
 
-{#snippet option(selection: FamilyPick, personId: string | null | undefined, description?: string)}
+{#snippet option(selection: FamilyPick, description?: string)}
   <button
     type="button"
     class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-start hover:bg-gray-100 dark:hover:bg-gray-800 {isPicked(
@@ -147,13 +137,7 @@
       : ''}"
     onclick={() => pick(selection)}
   >
-    {#if selection.memberId || selection.personId}
-      <FamilyAvatar {personId} name={selection.label} size="2.5rem" />
-    {:else}
-      <div class="flex size-10 shrink-0 items-center justify-center rounded-full bg-gray-200 dark:bg-gray-700">
-        <Icon icon={selection.name ? mdiAccountPlusOutline : mdiAccountQuestionOutline} size="1.4rem" />
-      </div>
-    {/if}
+    <FamilyAvatar personId={selection.personId} name={selection.label} size="2.5rem" />
     <div class="min-w-0 grow">
       <Text class="truncate">{selection.label}</Text>
       {#if description}
@@ -169,29 +153,17 @@
 <div class="flex flex-col gap-2">
   <Input
     bind:value={() => query, (text) => ((query = text), search(text))}
-    placeholder={peopleOnly ? $t('search_people') : $t('family_search_people')}
+    placeholder={$t('search_people')}
   />
 
   <div class="flex max-h-80 flex-col overflow-y-auto">
     {#each entries as entry (entry.key)}
-      {@render option(entry.pick, entry.personId, entry.description)}
+      {@render option(entry.pick, entry.description)}
     {/each}
 
     {#if searching}
       <div class="flex justify-center p-2"><LoadingSpinner /></div>
     {/if}
 
-    {#if !peopleOnly}
-      {#if query.trim()}
-        {@render option(
-          { name: query.trim(), label: $t('family_new_person_named', { values: { name: query.trim() } }) },
-          null,
-        )}
-      {/if}
-      {#if withMembers}
-        <!-- an unknown person only makes sense as someone's relative -->
-        {@render option({ label: $t('family_unknown_person') }, null, $t('family_unknown_person_description'))}
-      {/if}
-    {/if}
   </div>
 </div>

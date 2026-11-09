@@ -23,7 +23,7 @@ export class FamilyController {
   @Authenticated({ permission: Permission.PersonRead })
   @Endpoint({
     summary: 'Get the family tree',
-    description: 'All family members of the user and the parent and partner links between them.',
+    description: 'The family tree of this Immich, shared by all users: its people and the parent, partner and sibling links between them.',
     history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
   })
   getFamilyTree(@Auth() auth: AuthDto): Promise<FamilyTreeResponseDto> {
@@ -34,7 +34,7 @@ export class FamilyController {
   @Authenticated({ permission: Permission.PersonUpdate })
   @Endpoint({
     summary: 'Add a family member',
-    description: 'Add a person, or someone without photos, to the family tree.',
+    description: 'Add a person to the family tree.',
     history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
   })
   createFamilyMember(@Auth() auth: AuthDto, @Body() dto: FamilyMemberCreateDto): Promise<FamilyTreeResponseDto> {
@@ -45,7 +45,7 @@ export class FamilyController {
   @Authenticated({ permission: Permission.PersonUpdate })
   @Endpoint({
     summary: 'Update a family member',
-    description: 'Rename a family member, set their gender, link them to a person or mark them as yourself.',
+    description: 'Set the gender of a family member.',
     history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
   })
   updateFamilyMember(
@@ -60,7 +60,7 @@ export class FamilyController {
   @Authenticated({ permission: Permission.PersonUpdate })
   @Endpoint({
     summary: 'Remove a family member',
-    description: 'Remove a member and their links from the family tree. The person and their photos stay.',
+    description: 'Remove a person and their links from the family tree. The person and their photos stay.',
     history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
   })
   deleteFamilyMember(@Auth() auth: AuthDto, @Param() { id }: UUIDParamDto): Promise<FamilyTreeResponseDto> {
@@ -72,7 +72,7 @@ export class FamilyController {
   @Endpoint({
     summary: 'Add a family relationship',
     description:
-      'Say that one member is the parent, child, sibling or partner of another. Siblings without known parents get an unknown shared parent.',
+      'Say that a person is the parent, child, sibling or partner of someone in the family tree. Siblings without known parents are linked directly.',
     history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
   })
   addFamilyRelation(@Auth() auth: AuthDto, @Body() dto: FamilyRelationCreateDto): Promise<FamilyTreeResponseDto> {
@@ -83,7 +83,7 @@ export class FamilyController {
   @Authenticated({ permission: Permission.PersonUpdate })
   @Endpoint({
     summary: 'Remove a family link',
-    description: 'Remove one parent or partner link.',
+    description: 'Remove one parent, partner or sibling link.',
     history: new HistoryBuilder().added('v3.3.5').beta('v3.3.5'),
   })
   removeFamilyLink(@Auth() auth: AuthDto, @Body() dto: FamilyLinkDto): Promise<FamilyTreeResponseDto> {

@@ -72,7 +72,7 @@
   const surname = $derived(nameOf(memberId).trim().split(/\s+/).at(-1) ?? '');
 
   $effect(() => {
-    if (pick?.memberId && exclude.includes(pick.memberId)) {
+    if (pick && exclude.includes(pick.personId)) {
       pick = undefined;
     }
   });
@@ -84,11 +84,10 @@
     }
     saving = true;
     try {
-      const { memberId: pickedMemberId, personId, name } = pick;
       const tree = await familyApi.addRelation({
-        member: { memberId: pickedMemberId, personId, name },
+        personId: pick.personId,
         relation: selected.relation,
-        other: { memberId },
+        otherId: memberId,
         gender: selected.gender,
       });
       onClose(tree);

@@ -36,6 +36,8 @@
     boundingBoxY2: number;
     takenAt: string;
     similarity: number | null;
+    // set on a partner's photo or one in a shared album: only its owner can change the face
+    owner: { id: string; name: string } | null;
   };
   type SortOrder = 'oldest' | 'least-similar';
 
@@ -83,9 +85,13 @@
     return days;
   });
 
+  const ownFaces = (list: PersonFace[]) => list.filter(({ owner }) => !owner);
+  const sharedCount = $derived(faces.length - ownFaces(faces).length);
+
   const toggleDay = (dayFaces: PersonFace[]) => {
-    const select = dayFaces.some(({ id }) => !selected.has(id));
-    for (const { id } of dayFaces) {
+    const own = ownFaces(dayFaces);
+    const select = own.some(({ id }) => !selected.has(id));
+    for (const { id } of own) {
       if (select) {
         selected.add(id);
       } else {
@@ -133,14 +139,14 @@
   };
 
   const handleClick = (event: MouseEvent, face: PersonFace) => {
-    if (busy) {
+    if (busy || face.owner) {
       return;
     }
     const index = shown.findIndex(({ id }) => id === face.id);
     const from = lastClicked ? shown.findIndex(({ id }) => id === lastClicked) : -1;
     if (event.shiftKey && from !== -1) {
       const select = !selected.has(face.id);
-      for (const { id } of shown.slice(Math.min(from, index), Math.max(from, index) + 1)) {
+      for (const { id } of ownFaces(shown.slice(Math.min(from, index), Math.max(from, index) + 1))) {
         if (select) {
           selected.add(id);
         } else {
@@ -349,7 +355,12 @@
         >
           {person.name || $t('similar_people_unnamed')}
         </a>
-        <Text size="tiny" color="muted">{$t('similar_people_faces', { values: { count: faces.length } })}</Text>
+        <Text size="tiny" color="muted">
+          {$t('similar_people_faces', { values: { count: faces.length } })}
+          {#if sharedCount > 0}
+            · {$t('sort_faces_shared_count', { values: { count: sharedCount } })}
+          {/if}
+        </Text>
       </div>
     </div>
 
@@ -361,7 +372,8 @@
       {#each groups as group (group.day)}
         <section class="flex flex-col gap-2">
           {#if group.day}
-            {@const allSelected = group.faces.every(({ id }) => selected.has(id))}
+            {@const own = ownFaces(group.faces)}
+            {@const allSelected = own.length > 0 && own.every(({ id }) => selected.has(id))}
             <div class="mt-2 flex items-center gap-3">
               <Text class="font-medium">{formatDate(group.day, 'full')}</Text>
               <Text size="tiny" color="muted">
@@ -371,7 +383,7 @@
                 size="small"
                 variant="ghost"
                 color="secondary"
-                disabled={busy}
+                disabled={busy || own.length === 0}
                 onclick={() => toggleDay(group.faces)}
               >
                 {allSelected ? $t('sort_faces_deselect_day') : $t('sort_faces_select_day')}
@@ -398,8 +410,10 @@
   >
     <button
       type="button"
-      class="block w-full cursor-pointer select-none"
+      class="block w-full select-none {face.owner ? 'cursor-not-allowed' : 'cursor-pointer'}"
       aria-pressed={isSelected}
+      aria-disabled={!!face.owner}
+      title={face.owner ? $t('sort_faces_shared_hint', { values: { user: face.owner.name } }) : undefined}
       onclick={(event) => handleClick(event, face)}
     >
       <div class="relative aspect-square w-full overflow-hidden bg-gray-200 dark:bg-gray-700">
@@ -424,6 +438,13 @@
         {/if}
       </div>
     </button>
+    {#if face.owner}
+      <div
+        class="pointer-events-none absolute start-1.5 top-1.5 max-w-[calc(100%-2.5rem)] truncate rounded-full bg-black/60 px-2 py-0.5 text-xs text-white"
+      >
+        {face.owner.name}
+      </div>
+    {/if}
     {#if isSelected}
       <div
         class="pointer-events-none absolute start-1.5 top-1.5 flex size-6 items-center justify-center rounded-full bg-immich-primary text-sm font-bold text-white dark:bg-immich-dark-primary dark:text-black"

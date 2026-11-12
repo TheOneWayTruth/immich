@@ -417,10 +417,15 @@ export class PersonService extends BaseService {
       ids: [{ personGroupId, ownerId: auth.user.id }],
     });
 
-    const faces = await this.personRepository.getPersonFaces(auth.user.id, personGroupId);
+    const partnerIds = await getMyPartnerIds({
+      userId: auth.user.id,
+      repository: this.partnerRepository,
+    });
+    const faces = await this.personRepository.getPersonFaces(auth.user.id, personGroupId, partnerIds);
     return {
-      faces: faces.map(({ takenAt, similarity, ...face }) => ({
+      faces: faces.map(({ takenAt, similarity, ownerId, ownerName, ...face }) => ({
         ...face,
+        owner: ownerId === auth.user.id ? null : { id: ownerId, name: ownerName },
         takenAt: new Date(takenAt).toISOString(),
         similarity: similarity === null ? null : Number(similarity),
       })),

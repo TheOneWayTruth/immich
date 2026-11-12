@@ -229,6 +229,10 @@ const PersonFaceSchema = PersonMergeSuggestionFaceSchema.extend({
   id: z.uuidv4().describe('Face ID'),
   takenAt: z.string().meta({ format: 'date-time' }).describe('When the photo was taken (local time)'),
   similarity: z.number().nullable().describe("Similarity (0-1) to the person's average face"),
+  owner: z
+    .object({ id: z.uuidv4().describe('User ID'), name: z.string().describe('User name') })
+    .nullable()
+    .describe('Who owns the photo when it is not the user: a partner or a shared album. Only the owner can change the face'),
 }).meta({ id: 'PersonFaceDto' });
 
 const PersonFacesResponseSchema = z

@@ -124,6 +124,8 @@ export interface PersonFace {
   boundingBoxY2: number;
   takenAt: Date;
   similarity: number | null;
+  ownerId: string;
+  ownerName: string;
 }
 
 export type UnassignFacesOptions = DeleteFacesOptions & { clusterGroupId?: string };
@@ -1201,31 +1203,51 @@ export class PersonRepository {
   }
 
   /**
-   * every face of a person on the user's own timeline and archive, oldest photo first,
-   * with each face's similarity to the person's average face
+   * every face of a person the user can see, oldest photo first, with each face's similarity to the
+   * person's average face: the user's own timeline and archive, plus the timeline of partners and
+   * photos in albums shared with the user, the same photos the person's page and statistics count
    */
-  @GenerateSql({ params: [DummyValue.UUID, DummyValue.UUID] })
-  async getPersonFaces(ownerId: string, personGroupId: string) {
+  @GenerateSql({ params: [DummyValue.UUID, DummyValue.UUID, [DummyValue.UUID]] })
+  async getPersonFaces(ownerId: string, personGroupId: string, partnerIds: string[] = []) {
     const { rows } = await sql<PersonFace>`
       with "faces" as (
         select f."id", f."assetId", f."imageWidth", f."imageHeight",
           f."boundingBoxX1", f."boundingBoxY1", f."boundingBoxX2", f."boundingBoxY2",
-          a."localDateTime" as "takenAt", s."embedding"
+          a."localDateTime" as "takenAt", s."embedding", f."ownerId", u."name" as "ownerName"
         from "asset_face" f
         inner join "asset" a on a."id" = f."assetId"
+        inner join "user" u on u."id" = f."ownerId"
         left join "face_search" s on s."faceId" = f."id"
         where f."personGroupId" = ${personGroupId}
-          and f."ownerId" = ${ownerId}
           and f."deletedAt" is null
           and f."isVisible" is true
-          and f."assetVisibility" in (${sql.lit(AssetVisibility.Timeline)}, ${sql.lit(AssetVisibility.Archive)})
           and f."assetDeletedAt" is null
           and f."imageWidth" > 0
+          and (
+            (
+              f."ownerId" = ${ownerId}
+              and f."assetVisibility" in (${sql.lit(AssetVisibility.Timeline)}, ${sql.lit(AssetVisibility.Archive)})
+            )
+            or (
+              f."ownerId" <> ${ownerId}
+              and f."assetVisibility" = ${sql.lit(AssetVisibility.Timeline)}
+              and (
+                f."ownerId" = any(${partnerIds}::uuid[])
+                or exists (
+                  select 1
+                  from "album_asset" aa
+                  inner join "album" al on al."id" = aa."albumId" and al."deletedAt" is null
+                  inner join "album_user" au on au."albumId" = al."id" and au."userId" = ${ownerId}
+                  where aa."assetId" = f."assetId"
+                )
+              )
+            )
+          )
       ), "centroid" as (
         select l2_normalize(avg("embedding")) as "centroid" from "faces"
       )
       select "id", "assetId", "imageWidth", "imageHeight", "boundingBoxX1", "boundingBoxY1", "boundingBoxX2", "boundingBoxY2",
-        "takenAt", 1 - ("embedding" <=> "centroid") as "similarity"
+        "takenAt", 1 - ("embedding" <=> "centroid") as "similarity", "ownerId", "ownerName"
       from "faces", "centroid"
       order by "takenAt", "id"
     `.execute(this.db);

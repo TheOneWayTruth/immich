@@ -364,11 +364,19 @@
             variant="ghost"
             color="secondary"
             leadingIcon={mdiImageMultipleOutline}
-            onclick={() => goto(Route.viewPerson({ id }, { previousRoute: Route.family() }))}
+            onclick={() =>
+              goto(
+                selected.hasPerson === false
+                  ? Route.search({ personIds: [id] })
+                  : Route.viewPerson({ id }, { previousRoute: Route.family() }),
+              )}
           >
             {$t('family_open_photos')}
           </Button>
         </div>
+        {#if selected.hasPerson === false}
+          <Text size="small" color="muted">{$t('family_added_by_other')}</Text>
+        {/if}
 
         {#if relatives.length > 0}
           <div class="flex flex-col gap-1">

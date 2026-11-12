@@ -82,6 +82,9 @@ const FamilyMemberResponseSchema = z
     name: z.string(),
     gender: FamilyGenderSchema.nullable(),
     birthDate: z.string().nullable(),
+    hasPerson: z
+      .boolean()
+      .describe('The viewing user has this person among their own people (else another user added them)'),
   })
   .meta({ id: 'FamilyMemberResponseDto' });
 

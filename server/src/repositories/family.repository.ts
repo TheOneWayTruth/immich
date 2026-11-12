@@ -11,6 +11,8 @@ export interface FamilyMember {
   name: string;
   gender: FamilyGender | null;
   birthDate: string | null;
+  /** the viewing user has this person among their own people, so its page and photos are theirs to open */
+  hasPerson: boolean;
 }
 
 export interface FamilyLink {
@@ -174,7 +176,8 @@ export class FamilyRepository {
         f."personGroupId" as "id",
         coalesce(nullif(own."name", ''), other."name", '') as "name",
         f."gender",
-        coalesce(own."birthDate", other."birthDate")::text as "birthDate"
+        coalesce(own."birthDate", other."birthDate")::text as "birthDate",
+        own."ownerId" is not null as "hasPerson"
       from "family_person" f
       left join "person" own on own."personGroupId" = f."personGroupId" and own."ownerId" = ${userId}
       left join lateral (
@@ -194,6 +197,24 @@ export class FamilyRepository {
       select "type", "fromId", "toId", "isStep" from "family_relation" order by "createdAt", "fromId", "toId"
     `.execute(this.db);
     return rows;
+  }
+
+  /**
+   * The face of a person for the family tree: the viewing user's own picture first, else the picture another user
+   * chose, as long as the person is in the family tree (which every user sees). People outside the tree only show the
+   * viewing user's own picture.
+   */
+  async getThumbnailPath(userId: string, id: string): Promise<string | undefined> {
+    await this.ensureTables();
+    const { rows } = await sql<{ thumbnailPath: string }>`
+      select p."thumbnailPath" from "person" p
+      where p."personGroupId" = ${id}
+        and p."thumbnailPath" != ''
+        and (p."ownerId" = ${userId} or exists (select 1 from "family_person" f where f."personGroupId" = ${id}))
+      order by p."ownerId" = ${userId} desc, p."createdAt"
+      limit 1
+    `.execute(this.db);
+    return rows[0]?.thumbnailPath;
   }
 
   async addMember(id: string, gender?: FamilyGender | null) {

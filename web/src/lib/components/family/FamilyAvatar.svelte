@@ -1,7 +1,6 @@
 <script lang="ts">
   import ImageThumbnail from '#lib/components/assets/thumbnail/ImageThumbnail.svelte';
-  import { getPeopleThumbnailUrl } from '#lib/utils';
-  import type { PersonResponseDto } from '@immich/sdk';
+  import { getFamilyThumbnailUrl } from '#lib/utils/family.ts';
   import { Icon } from '@immich/ui';
   import { mdiAccountQuestionOutline } from '@mdi/js';
 
@@ -20,7 +19,7 @@
     <ImageThumbnail
       circle
       shadow
-      url={getPeopleThumbnailUrl({ id: personId } as PersonResponseDto)}
+      url={getFamilyThumbnailUrl(personId)}
       altText={name}
       widthStyle={size}
       heightStyle={size}

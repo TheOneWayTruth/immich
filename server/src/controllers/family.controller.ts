@@ -1,7 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Next, Param, Patch, Post, Res } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import type { AuthDto } from 'src/dtos/auth.dto.js';
+import type { NextFunction, Response } from 'express';
 import { Endpoint, HistoryBuilder } from 'src/decorators.js';
+import type { AuthDto } from 'src/dtos/auth.dto.js';
 import {
   FamilyLinkDto,
   FamilyMemberCreateDto,
@@ -11,14 +12,21 @@ import {
   FamilyTreeResponseDto,
 } from 'src/dtos/family.dto.js';
 import { ApiTag, Permission } from 'src/enum.js';
-import { Auth, Authenticated } from 'src/middleware/auth.guard.js';
+import { Auth, Authenticated, FileResponse } from 'src/middleware/auth.guard.js';
+import { LoggingRepository } from 'src/repositories/logging.repository.js';
 import { FamilyService } from 'src/services/family.service.js';
+import { sendFile } from 'src/utils/file.js';
 import { UUIDParamDto } from 'src/validation.js';
 
 @ApiTags(ApiTag.People)
 @Controller('family')
 export class FamilyController {
-  constructor(private service: FamilyService) {}
+  constructor(
+    private service: FamilyService,
+    private logger: LoggingRepository,
+  ) {
+    this.logger.setContext(FamilyController.name);
+  }
 
   @Get()
   @Authenticated({ permission: Permission.PersonRead })
@@ -29,6 +37,24 @@ export class FamilyController {
   })
   getFamilyTree(@Auth() auth: AuthDto): Promise<FamilyTreeResponseDto> {
     return this.service.getTree(auth);
+  }
+
+  @Get('people/:id/thumbnail')
+  @FileResponse()
+  @Authenticated({ permission: Permission.PersonRead })
+  @Endpoint({
+    summary: 'Get the face of a family member',
+    description:
+      'The thumbnail of someone in the family tree, also when another user added them; the own picture comes first. For people outside the tree only the own picture.',
+    history: new HistoryBuilder().added('v3.4.1').beta('v3.4.1'),
+  })
+  async getFamilyThumbnail(
+    @Res() res: Response,
+    @Next() next: NextFunction,
+    @Auth() auth: AuthDto,
+    @Param() { id }: UUIDParamDto,
+  ) {
+    await sendFile(res, next, () => this.service.getThumbnail(auth, id), this.logger);
   }
 
   @Post('members')

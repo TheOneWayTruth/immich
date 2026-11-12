@@ -24,6 +24,7 @@
   import { lang, locale } from '#lib/stores/preferences.store.ts';
   import { handlePromiseError } from '#lib/utils.ts';
   import { parseUtcDate } from '#lib/utils/date-time.ts';
+  import { familyApi } from '#lib/utils/family.ts';
   import { handleError } from '#lib/utils/handle-error.ts';
   import { isAlbumsRoute, isPeopleRoute } from '#lib/utils/navigation.ts';
   import { toTimelineAsset } from '#lib/utils/timeline-util.ts';
@@ -201,7 +202,11 @@
   async function getPersonName(personIds: string[]) {
     const personNames = await Promise.all(
       personIds.map(async (personId) => {
-        const person = await getPerson({ id: personId });
+        // someone another user added to the family tree is no person of this user's own
+        const person = await getPerson({ id: personId }).catch(async () => {
+          const tree = await familyApi.get().catch(() => undefined);
+          return { name: tree?.members.find((member) => member.id === personId)?.name ?? '' };
+        });
 
         if (person.name === '') {
           return $t('no_name');

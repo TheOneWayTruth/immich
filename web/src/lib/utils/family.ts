@@ -12,7 +12,12 @@ export type FamilyMember = {
   name: string;
   gender: FamilyGender | null;
   birthDate: string | null;
+  /** false when another user added this person: the viewing user has no person page of their own for them */
+  hasPerson?: boolean;
 };
+
+/** the face of a family member, also of someone another user added */
+export const getFamilyThumbnailUrl = (personId: string) => `/api/family/people/${personId}/thumbnail`;
 
 /**
  * parent links point from the parent to the child. isStep marks a stepparent; inferred links are not stored:

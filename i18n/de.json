@@ -1162,6 +1162,7 @@
   "family_add_person": "Zum Stammbaum hinzufügen",
   "family_add_relative": "Verwandte hinzufügen",
   "family_add_relative_of": "Verwandte von {name} hinzufügen",
+  "family_added_by_other": "Von jemand anderem hinzugefügt. Zeigt die Fotos dieser Person, die du sehen kannst: deine eigenen und die deiner Partner.",
   "family_empty_description": "Fang mit dir oder jemand anderem an und füge Eltern, Geschwister, Partner und Kinder hinzu. Alle anderen Beziehungen, etwa Tante oder Cousin, werden daraus abgeleitet.",
   "family_fit_to_screen": "Ganzen Stammbaum zeigen",
   "family_focus_hint": "Die Beschriftungen zeigen, wie alle mit der ausgewählten Person verwandt sind.",

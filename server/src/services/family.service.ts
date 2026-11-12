@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { AuthDto } from 'src/dtos/auth.dto.js';
 import {
   FamilyLinkDto,
@@ -10,8 +10,11 @@ import {
   FamilyStepUpdateDto,
   FamilyTreeResponseDto,
 } from 'src/dtos/family.dto.js';
+import { CacheControl } from 'src/enum.js';
 import { FamilyLink, FamilyMember, FamilyRepository } from 'src/repositories/family.repository.js';
 import { PersonRepository } from 'src/repositories/person.repository.js';
+import { ImmichFileResponse } from 'src/utils/file.js';
+import { mimeTypes } from 'src/utils/mime-types.js';
 
 type TreeLink = FamilyLink & { inferred: boolean };
 
@@ -152,6 +155,19 @@ export class FamilyService {
   async getTree(auth: AuthDto, memberId?: string): Promise<FamilyTreeResponseDto> {
     const tree = await this.load(auth);
     return { members: [...tree.members.values()], links: tree.links, memberId };
+  }
+
+  /** the face of anyone in the family tree, also of people another user added, or of one of the user's own people */
+  async getThumbnail(auth: AuthDto, id: string): Promise<ImmichFileResponse> {
+    const thumbnailPath = await this.familyRepository.getThumbnailPath(auth.user.id, id);
+    if (!thumbnailPath) {
+      throw new NotFoundException();
+    }
+    return new ImmichFileResponse({
+      path: thumbnailPath,
+      contentType: mimeTypes.lookup(thumbnailPath),
+      cacheControl: CacheControl.PrivateWithoutCache,
+    });
   }
 
   async createMember(auth: AuthDto, { personId, gender }: FamilyMemberCreateDto) {

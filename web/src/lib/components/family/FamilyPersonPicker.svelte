@@ -4,8 +4,8 @@
 </script>
 
 <script lang="ts">
-  import FamilyAvatar from '$lib/components/family/FamilyAvatar.svelte';
-  import type { FamilyGraph } from '$lib/utils/family';
+  import FamilyAvatar from '#lib/components/family/FamilyAvatar.svelte';
+  import type { FamilyGraph } from '#lib/utils/family';
   import { getAllPeople, searchPerson, type PersonResponseDto } from '@immich/sdk';
   import { Icon, Input, LoadingSpinner, Text } from '@immich/ui';
   import { mdiCheck } from '@mdi/js';

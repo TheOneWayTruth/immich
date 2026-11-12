@@ -5,7 +5,7 @@ import {
   type FamilyGender,
   type FamilyLink,
   type FamilyMember,
-} from '$lib/utils/family';
+} from '#lib/utils/family';
 
 const member = (id: string, gender: FamilyGender | null = null, name = id): FamilyMember => ({
   id,

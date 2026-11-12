@@ -1,13 +1,13 @@
 <script lang="ts">
-  import FamilyPersonPicker, { type FamilyPick } from '$lib/components/family/FamilyPersonPicker.svelte';
+  import FamilyPersonPicker, { type FamilyPick } from '#lib/components/family/FamilyPersonPicker.svelte';
   import {
     familyApi,
     type FamilyGender,
     type FamilyGraph,
     type FamilyRelation,
     type FamilyTreeResponse,
-  } from '$lib/utils/family';
-  import { handleError } from '$lib/utils/handle-error';
+  } from '#lib/utils/family';
+  import { handleError } from '#lib/utils/handle-error';
   import { Checkbox, Field, FormModal, Label, Select, Stack } from '@immich/ui';
   import { mdiAccountMultiplePlusOutline } from '@mdi/js';
   import { t, type Translations } from 'svelte-i18n';

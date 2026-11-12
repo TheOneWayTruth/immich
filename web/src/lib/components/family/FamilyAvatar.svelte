@@ -1,6 +1,6 @@
 <script lang="ts">
-  import ImageThumbnail from '$lib/components/assets/thumbnail/ImageThumbnail.svelte';
-  import { getPeopleThumbnailUrl } from '$lib/utils';
+  import ImageThumbnail from '#lib/components/assets/thumbnail/ImageThumbnail.svelte';
+  import { getPeopleThumbnailUrl } from '#lib/utils';
   import type { PersonResponseDto } from '@immich/sdk';
   import { Icon } from '@immich/ui';
   import { mdiAccountQuestionOutline } from '@mdi/js';

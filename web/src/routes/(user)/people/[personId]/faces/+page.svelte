@@ -1,12 +1,12 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import ImageThumbnail from '$lib/components/assets/thumbnail/ImageThumbnail.svelte';
-  import UserPageLayout from '$lib/components/layouts/UserPageLayout.svelte';
-  import ControlAppBar from '$lib/components/shared-components/ControlAppBar.svelte';
-  import { Route } from '$lib/route';
-  import { locale } from '$lib/stores/preferences.store';
-  import { getAssetMediaUrl, getPeopleThumbnailUrl } from '$lib/utils';
-  import { handleError } from '$lib/utils/handle-error';
+  import ImageThumbnail from '#lib/components/assets/thumbnail/ImageThumbnail.svelte';
+  import UserPageLayout from '#lib/components/layouts/UserPageLayout.svelte';
+  import ControlAppBar from '#lib/components/shared-components/ControlAppBar.svelte';
+  import { Route } from '#lib/route';
+  import { locale } from '#lib/stores/preferences.store';
+  import { getAssetMediaUrl, getPeopleThumbnailUrl } from '#lib/utils';
+  import { handleError } from '#lib/utils/handle-error';
   import {
     AssetMediaSize,
     createPerson,

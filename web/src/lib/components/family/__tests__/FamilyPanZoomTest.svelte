@@ -1,5 +1,5 @@
 <script lang="ts">
-  import FamilyPanZoom from '$lib/components/family/FamilyPanZoom.svelte';
+  import FamilyPanZoom from '#lib/components/family/FamilyPanZoom.svelte';
 
   type Props = { onCardClick: () => void };
 

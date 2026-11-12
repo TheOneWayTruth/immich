@@ -1,6 +1,6 @@
 <script lang="ts">
-  import FamilyPersonPicker, { type FamilyPick } from '$lib/components/family/FamilyPersonPicker.svelte';
-  import type { FamilyGender, FamilyGraph } from '$lib/utils/family';
+  import FamilyPersonPicker, { type FamilyPick } from '#lib/components/family/FamilyPersonPicker.svelte';
+  import type { FamilyGender, FamilyGraph } from '#lib/utils/family';
   import { Button, Field, FormModal, HStack, Stack } from '@immich/ui';
   import { mdiAccountPlusOutline } from '@mdi/js';
   import { t } from 'svelte-i18n';

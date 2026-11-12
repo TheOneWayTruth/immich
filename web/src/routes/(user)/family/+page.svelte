@@ -1,11 +1,11 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import FamilyAvatar from '$lib/components/family/FamilyAvatar.svelte';
-  import FamilyPanZoom from '$lib/components/family/FamilyPanZoom.svelte';
-  import UserPageLayout from '$lib/components/layouts/UserPageLayout.svelte';
-  import FamilyPickModal from '$lib/modals/FamilyPickModal.svelte';
-  import FamilyRelativeModal from '$lib/modals/FamilyRelativeModal.svelte';
-  import { Route } from '$lib/route';
+  import FamilyAvatar from '#lib/components/family/FamilyAvatar.svelte';
+  import FamilyPanZoom from '#lib/components/family/FamilyPanZoom.svelte';
+  import UserPageLayout from '#lib/components/layouts/UserPageLayout.svelte';
+  import FamilyPickModal from '#lib/modals/FamilyPickModal.svelte';
+  import FamilyRelativeModal from '#lib/modals/FamilyRelativeModal.svelte';
+  import { Route } from '#lib/route';
   import {
     FAMILY_CARD,
     FamilyGraph,
@@ -15,8 +15,8 @@
     type FamilyLink,
     type FamilyRelationLabel,
     type FamilyTreeResponse,
-  } from '$lib/utils/family';
-  import { handleError } from '$lib/utils/handle-error';
+  } from '#lib/utils/family';
+  import { handleError } from '#lib/utils/handle-error';
   import { getPerson } from '@immich/sdk';
   import { Button, Field, IconButton, LoadingSpinner, Text, modalManager } from '@immich/ui';
   import {

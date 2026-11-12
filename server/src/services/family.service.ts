@@ -157,9 +157,16 @@ export class FamilyService {
     return { members: [...tree.members.values()], links: tree.links, memberId };
   }
 
-  /** the face of anyone in the family tree, also of people another user added, or of one of the user's own people */
+  /**
+   * the face of anyone in the family tree, the same picture the people page shows (the user's own, else one shared
+   * with them); only people nobody shared with the user fall back to another user's picture
+   */
   async getThumbnail(auth: AuthDto, id: string): Promise<ImmichFileResponse> {
-    const thumbnailPath = await this.familyRepository.getThumbnailPath(auth.user.id, id);
+    const person = await this.personRepository.getForThumbnail({ ownerId: auth.user.id, personGroupId: id });
+    const thumbnailPath =
+      person?.thumbnailPath ||
+      person?.sharedThumbnailPath ||
+      (await this.familyRepository.getThumbnailPath(auth.user.id, id));
     if (!thumbnailPath) {
       throw new NotFoundException();
     }

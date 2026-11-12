@@ -200,9 +200,9 @@ export class FamilyRepository {
   }
 
   /**
-   * The face of a person for the family tree: the viewing user's own picture first, else the picture another user
-   * chose, as long as the person is in the family tree (which every user sees). People outside the tree only show the
-   * viewing user's own picture.
+   * The fallback face of a person for the family tree, when the viewing user has no picture of their own and nobody
+   * shared one: the picture another user chose, as long as the person is in the family tree (which every user sees).
+   * People outside the tree only show the viewing user's own picture.
    */
   async getThumbnailPath(userId: string, id: string): Promise<string | undefined> {
     await this.ensureTables();

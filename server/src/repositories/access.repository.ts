@@ -6,7 +6,7 @@ import { PersonUserRole } from 'src/dtos/person.dto.js';
 import { AlbumUserRole, AssetVisibility } from 'src/enum.js';
 import { PersonId } from 'src/repositories/person.repository.js';
 import { DB } from 'src/schema/index.js';
-import { asUuid } from 'src/utils/database.js';
+import { asUuid, inSharedAlbum } from 'src/utils/database.js';
 
 class ActivityAccess {
   constructor(private db: Kysely<DB>) {}
@@ -603,6 +603,10 @@ class PersonAccess {
 
   @GenerateSql({ params: [DummyValue.UUID, DummyValue.UUID_SET] })
   @ChunkedSet({ paramIndex: 1 })
+  /**
+   * faces on the user's own photos, and faces of the user's people on photos the user can see
+   * from someone in the same cluster group: a partner's timeline or an album shared with the user
+   */
   async checkFaceOwnerAccess(userId: string, assetFaceIds: Set<string>) {
     if (assetFaceIds.size === 0) {
       return new Set<string>();
@@ -611,9 +615,41 @@ class PersonAccess {
     return this.db
       .selectFrom('asset_face')
       .select('asset_face.id')
-      .leftJoin('asset', (join) => join.onRef('asset.id', '=', 'asset_face.assetId').on('asset.deletedAt', 'is', null))
+      .innerJoin('asset', (join) => join.onRef('asset.id', '=', 'asset_face.assetId').on('asset.deletedAt', 'is', null))
       .where('asset_face.id', 'in', [...assetFaceIds])
-      .where('asset.ownerId', '=', userId)
+      .where((eb) =>
+        eb.or([
+          eb('asset.ownerId', '=', userId),
+          eb.and([
+            eb('asset.visibility', '=', AssetVisibility.Timeline),
+            eb.exists(
+              eb
+                .selectFrom('person')
+                .select(sql.lit(1).as('exists'))
+                .whereRef('person.personGroupId', '=', 'asset_face.personGroupId')
+                .where('person.ownerId', '=', userId),
+            ),
+            eb.exists(
+              eb
+                .selectFrom('user as owner')
+                .innerJoin('user as viewer', 'viewer.clusterGroupId', 'owner.clusterGroupId')
+                .select(sql.lit(1).as('exists'))
+                .whereRef('owner.id', '=', 'asset.ownerId')
+                .where('viewer.id', '=', userId),
+            ),
+            eb.or([
+              eb.exists(
+                eb
+                  .selectFrom('partner')
+                  .select(sql.lit(1).as('exists'))
+                  .whereRef('partner.sharedById', '=', 'asset.ownerId')
+                  .where('partner.sharedWithId', '=', userId),
+              ),
+              inSharedAlbum(userId, 'asset.id'),
+            ]),
+          ]),
+        ]),
+      )
       .execute()
       .then((faces) => new Set(faces.map((face) => face.id)));
   }

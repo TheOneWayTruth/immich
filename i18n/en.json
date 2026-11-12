@@ -2228,7 +2228,7 @@
   "sort_faces_removed": "Removed {count, plural, one {# face} other {# faces}}",
   "sort_faces_select_day": "Select day",
   "sort_faces_shared_count": "{count, plural, one {# from a partner or shared album} other {# from partners or shared albums}}",
-  "sort_faces_shared_hint": "{user}'s photo: only {user} can change this face",
+  "sort_faces_shared_hint": "{user}'s photo: moving or removing this face also changes it for {user}",
   "sort_faces_similarity": "Similarity to this person's average face",
   "sort_items": "Number of items",
   "sort_modified": "Date modified",

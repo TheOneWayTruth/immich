@@ -324,7 +324,9 @@ export class PersonService extends BaseService {
           changeFeaturePhoto.set(personKey(face.person), face.person);
         }
 
-        await this.personRepository.reassignFace(face.id, person.personGroupId);
+        for (const owner of await this.reassignFaceOfAnyOwner(auth, face, person)) {
+          changeFeaturePhoto.set(personKey(owner), owner);
+        }
       }
 
       result.push(mapPerson(person));
@@ -333,6 +335,43 @@ export class PersonService extends BaseService {
       await this.createNewFeaturePhoto(changeFeaturePhoto.values().toArray());
     }
     return result;
+  }
+
+  /**
+   * moves a face to the person, also when it is on someone else's photo (a partner's or one in a shared album).
+   * Then the photo's owner gets a person in the new group, as facial recognition would give them, named like the
+   * user's; returns the owner's people whose feature photo was this face and needs replacing
+   */
+  private async reassignFaceOfAnyOwner(
+    auth: AuthDto,
+    face: { id: string; ownerId: string; personGroupId: string | null },
+    person: { personGroupId: string; name: string; birthDate: Date | string | null },
+  ): Promise<PersonId[]> {
+    await this.personRepository.reassignFace(face.id, person.personGroupId);
+    if (face.ownerId === auth.user.id || face.personGroupId === person.personGroupId) {
+      return [];
+    }
+
+    const replaceFeaturePhoto: PersonId[] = [];
+    if (face.personGroupId) {
+      const old = await this.personRepository.getByGroupId({ ownerId: face.ownerId, personGroupId: face.personGroupId });
+      if (old?.faceAssetId === face.id) {
+        replaceFeaturePhoto.push(old);
+      }
+    }
+
+    const target = { ownerId: face.ownerId, personGroupId: person.personGroupId };
+    if (!(await this.personRepository.getByGroupId(target))) {
+      await this.personRepository.create({
+        ...target,
+        name: person.name,
+        birthDate: person.birthDate,
+        faceAssetId: face.id,
+      });
+      await this.jobRepository.queue({ name: JobName.PersonGenerateThumbnail, data: target });
+    }
+
+    return replaceFeaturePhoto;
   }
 
   async reassignFacesById(auth: AuthDto, personGroupId: string, dto: FaceDto): Promise<PersonResponseDto> {
@@ -345,12 +384,15 @@ export class PersonService extends BaseService {
     const face = await this.personRepository.getFaceById(dto.id, { viewingUserId: auth.user.id });
     const person = await this.findOrFail(auth, personGroupId);
 
-    await this.personRepository.reassignFace(face.id, person.personGroupId);
+    const ownerPeople = await this.reassignFaceOfAnyOwner(auth, face, person);
     if (person.faceAssetId === null) {
       await this.createNewFeaturePhoto([person]);
     }
     if (face.person && face.person.faceAssetId === face.id) {
       await this.createNewFeaturePhoto([face.person]);
+    }
+    if (ownerPeople.length > 0) {
+      await this.createNewFeaturePhoto(ownerPeople);
     }
 
     return mapPerson(await this.findOrFail(auth, personGroupId));

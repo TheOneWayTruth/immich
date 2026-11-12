@@ -2207,7 +2207,7 @@
   "sort_faces_removed": "{count, plural, one {# Gesicht} other {# Gesichter}} entfernt",
   "sort_faces_select_day": "Tag auswählen",
   "sort_faces_shared_count": "{count} von Partnern oder aus geteilten Alben",
-  "sort_faces_shared_hint": "Foto von {user}: nur {user} kann dieses Gesicht ändern",
+  "sort_faces_shared_hint": "Foto von {user}: Verschieben oder Entfernen ändert es auch bei {user}",
   "sort_faces_similarity": "Ähnlichkeit zum Durchschnittsgesicht dieser Person",
   "sort_items": "Anzahl der Einträge",
   "sort_modified": "Datum geändert",

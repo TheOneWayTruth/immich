@@ -232,7 +232,7 @@ const PersonFaceSchema = PersonMergeSuggestionFaceSchema.extend({
   owner: z
     .object({ id: z.uuidv4().describe('User ID'), name: z.string().describe('User name') })
     .nullable()
-    .describe('Who owns the photo when it is not the user: a partner or a shared album. Only the owner can change the face'),
+    .describe('Who owns the photo when it is not the user: a partner or a shared album'),
 }).meta({ id: 'PersonFaceDto' });
 
 const PersonFacesResponseSchema = z
